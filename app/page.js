@@ -558,8 +558,9 @@ function IntegrationsView() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
   const [testing, setTesting] = useState('');
-  const [keys, setKeys] = useState({ openai: '', heygen: '', yt_client_id: '', yt_client_secret: '' });
+  const [keys, setKeys] = useState({ openai: '', heygen: '', heygen_avatar_id: '', yt_client_id: '', yt_client_secret: '' });
   const [showKeys, setShowKeys] = useState({});
+  const [avatars, setAvatars] = useState([]);
 
   const fetchIntegrations = useCallback(async () => {
     const d = await api('integrations'); if (d.success) setIntegrations(d.integrations || []); setLoading(false);
@@ -572,7 +573,10 @@ function IntegrationsView() {
     setSaving(provider);
     const d = await api('integrations', { method: 'POST', body: JSON.stringify({ provider, config_json: config }) });
     if (d.success) {
-      if (d.connected) { toast.success(`${provider}: ${d.message || 'Connected successfully!'}`); }
+      if (d.connected) {
+        toast.success(`${provider}: ${d.message || 'Connected successfully!'}`);
+        if (d.avatars) setAvatars(d.avatars);
+      }
       else { toast.error(`${provider}: ${d.message || 'Key saved but validation failed. Not marked as connected.'}`); }
       fetchIntegrations();
     } else toast.error(d.message);
@@ -620,8 +624,27 @@ function IntegrationsView() {
           <div className="space-y-1.5"><Label className="text-xs">API Key</Label>
             <div className="relative"><Input type={showKeys.heygen ? 'text' : 'password'} placeholder="Your HeyGen API key" value={keys.heygen} onChange={e => setKeys(p => ({...p, heygen: e.target.value}))} className="pr-10" />
               <button className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setShowKeys(p => ({...p, heygen: !p.heygen}))}>{showKeys.heygen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button></div></div>
+          <div className="space-y-1.5"><Label className="text-xs">Avatar ID <span className="text-muted-foreground">(auto-detected on save, or paste your own)</span></Label>
+            <div className="flex gap-2">
+              <Input placeholder="Auto-detected from your account" value={keys.heygen_avatar_id} onChange={e => setKeys(p => ({...p, heygen_avatar_id: e.target.value}))} className="flex-1" />
+              <Button size="sm" variant="outline" onClick={async () => {
+                const d = await api('heygen/avatars');
+                if (d.success && d.avatars?.length > 0) {
+                  setAvatars(d.avatars);
+                  if (!keys.heygen_avatar_id) setKeys(p => ({...p, heygen_avatar_id: d.avatars[0].avatar_id}));
+                  toast.success(`${d.avatars.length} avatar(s) found`);
+                } else { toast.error(d.message || 'No avatars found'); }
+              }}>Load</Button>
+            </div>
+            {avatars.length > 0 && (
+              <Select value={keys.heygen_avatar_id} onValueChange={v => setKeys(p => ({...p, heygen_avatar_id: v}))}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select avatar" /></SelectTrigger>
+                <SelectContent>{avatars.map(a => <SelectItem key={a.avatar_id} value={a.avatar_id}>{a.avatar_name} ({a.avatar_id})</SelectItem>)}</SelectContent>
+              </Select>
+            )}
+          </div>
           <div className="flex gap-2">
-            <Button size="sm" onClick={() => handleSave('heygen', { api_key: keys.heygen })} disabled={!keys.heygen || saving === 'heygen'} className="flex-1">{saving === 'heygen' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}Save</Button>
+            <Button size="sm" onClick={() => handleSave('heygen', { api_key: keys.heygen, ...(keys.heygen_avatar_id ? { avatar_id: keys.heygen_avatar_id } : {}) })} disabled={!keys.heygen || saving === 'heygen'} className="flex-1">{saving === 'heygen' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}Save</Button>
             <Button size="sm" variant="outline" onClick={() => handleTest('heygen')} disabled={testing === 'heygen'}>{testing === 'heygen' ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Test'}</Button>
           </div>
         </div>

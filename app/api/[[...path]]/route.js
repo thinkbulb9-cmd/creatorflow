@@ -242,7 +242,16 @@ async function validateApiKey(provider, configJson) {
         headers: { 'X-Api-Key': configJson.api_key }
       });
       const body = await res.json().catch(() => null);
-      if (res.ok) return { valid: true, message: 'Connected successfully' };
+      if (res.ok) {
+        const avatars = body?.data?.avatars || [];
+        const firstAvatar = avatars.length > 0 ? avatars[0].avatar_id : null;
+        return {
+          valid: true,
+          message: `Connected successfully. ${avatars.length} avatar(s) found.`,
+          avatars: avatars.slice(0, 20).map(a => ({ avatar_id: a.avatar_id, avatar_name: a.avatar_name || a.avatar_id })),
+          default_avatar_id: firstAvatar
+        };
+      }
       let detail = 'Invalid API key';
       if (body) {
         if (typeof body.message === 'string') detail = body.message;
@@ -269,8 +278,17 @@ async function handleSaveIntegration(req, userId) {
     if (!provider || !config_json) return error('Provider and config required', 'MISSING_FIELDS');
 
     const validation = await validateApiKey(provider, config_json);
-    const result = await integrationService.saveIntegration(userId, provider, config_json, validation.valid);
-    return json({ success: true, integration: result, connected: validation.valid, message: validation.message });
+
+    const finalConfig = { ...config_json };
+    if (provider === 'heygen' && validation.valid && validation.default_avatar_id && !config_json.avatar_id) {
+      finalConfig.avatar_id = validation.default_avatar_id;
+    }
+
+    const result = await integrationService.saveIntegration(userId, provider, finalConfig, validation.valid);
+    return json({
+      success: true, integration: result, connected: validation.valid, message: validation.message,
+      ...(validation.avatars ? { avatars: validation.avatars } : {})
+    });
   } catch (e) { return error(e.message, 'SAVE_ERROR', 500); }
 }
 
@@ -348,6 +366,14 @@ export async function GET(request, { params }) {
   if (path[0] === 'integrations') return handleGetIntegrations(userId);
   if (path[0] === 'dashboard' && path[1] === 'stats') return handleDashboardStats(userId);
   if (path[0] === 'youtube' && path[1] === 'auth') return handleYoutubeAuth(userId);
+  if (path[0] === 'heygen' && path[1] === 'avatars') {
+    try {
+      const int = await integrationService.getUserIntegration(userId, 'heygen');
+      if (!int?.config_json?.api_key) return error('HeyGen not connected', 'NOT_CONFIGURED', 400);
+      const avatars = await heygenService.listAvatars(int.config_json.api_key);
+      return json({ success: true, avatars, current_avatar_id: int.config_json?.avatar_id || null });
+    } catch (e) { return error(e.message, 'AVATARS_ERROR', 500); }
+  }
   if (path[0] === 'video-jobs' && path.length === 3 && path[2] === 'poll') return handlePollVideoJob(path[1], userId);
   return error('Not found', 'NOT_FOUND', 404);
 }
