@@ -213,13 +213,48 @@ async function handleGetIntegrations(userId) {
   return json({ success: true, integrations });
 }
 
+async function validateApiKey(provider, configJson) {
+  try {
+    if (provider === 'openai') {
+      const res = await fetch('https://api.openai.com/v1/models', {
+        headers: { 'Authorization': `Bearer ${configJson.api_key}` }
+      });
+      return { valid: res.ok, message: res.ok ? 'Connected successfully' : `Invalid API key (${res.status})` };
+    }
+    if (provider === 'heygen') {
+      const res = await fetch('https://api.heygen.com/v2/avatars', {
+        headers: { 'X-Api-Key': configJson.api_key }
+      });
+      const body = await res.json().catch(() => null);
+      if (res.ok) return { valid: true, message: 'Connected successfully' };
+      let detail = 'Invalid API key';
+      if (body) {
+        if (typeof body.message === 'string') detail = body.message;
+        else if (typeof body.error === 'string') detail = body.error;
+        else if (body.error?.message) detail = body.error.message;
+        else if (body.code) detail = `Error code: ${body.code}`;
+        else detail = `HTTP ${res.status} - Authentication failed`;
+      }
+      return { valid: false, message: `HeyGen: ${detail}` };
+    }
+    if (provider === 'youtube') {
+      return { valid: true, message: 'YouTube credentials saved. Use Connect OAuth to authorize.' };
+    }
+    return { valid: true, message: 'Saved' };
+  } catch (e) {
+    return { valid: false, message: `Validation error: ${e.message}` };
+  }
+}
+
 async function handleSaveIntegration(req, userId) {
   try {
     const body = await req.json();
     const { provider, config_json } = body;
     if (!provider || !config_json) return error('Provider and config required', 'MISSING_FIELDS');
-    const result = await integrationService.saveIntegration(userId, provider, config_json);
-    return json({ success: true, integration: result });
+
+    const validation = await validateApiKey(provider, config_json);
+    const result = await integrationService.saveIntegration(userId, provider, config_json, validation.valid);
+    return json({ success: true, integration: result, connected: validation.valid, message: validation.message });
   } catch (e) { return error(e.message, 'SAVE_ERROR', 500); }
 }
 
@@ -235,16 +270,19 @@ async function handleTestIntegration(req, userId) {
     const integration = await integrationService.getUserIntegration(userId, provider);
     if (!integration) return json({ success: true, connected: false, message: 'Not configured' });
     const apiKey = integration.config_json?.api_key;
-    if (!apiKey) return json({ success: true, connected: false, message: 'No API key found' });
-    if (provider === 'openai') {
-      const res = await fetch('https://api.openai.com/v1/models', { headers: { 'Authorization': `Bearer ${apiKey}` } });
-      return json({ success: true, connected: res.ok, message: res.ok ? 'Connected successfully' : 'Invalid API key' });
+    if (!apiKey && provider !== 'youtube') return json({ success: true, connected: false, message: 'No API key found' });
+
+    const validation = await validateApiKey(provider, integration.config_json);
+
+    if (validation.valid !== integration.is_connected) {
+      const db = await getDb();
+      await db.collection('integrations').updateOne(
+        { user_id: userId, provider },
+        { $set: { is_connected: validation.valid, updated_at: new Date() } }
+      );
     }
-    if (provider === 'heygen') {
-      const res = await fetch('https://api.heygen.com/v1/avatar.list', { headers: { 'X-Api-Key': apiKey } });
-      return json({ success: true, connected: res.ok, message: res.ok ? 'Connected successfully' : 'Invalid API key' });
-    }
-    return json({ success: true, connected: true, message: 'Configuration saved' });
+
+    return json({ success: true, connected: validation.valid, message: validation.message });
   } catch (e) { return json({ success: true, connected: false, message: e.message }); }
 }
 

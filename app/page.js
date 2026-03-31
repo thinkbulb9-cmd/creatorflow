@@ -569,7 +569,11 @@ function IntegrationsView() {
   const handleSave = async (provider, config) => {
     setSaving(provider);
     const d = await api('integrations', { method: 'POST', body: JSON.stringify({ provider, config_json: config }) });
-    if (d.success) { toast.success(`${provider} saved!`); fetchIntegrations(); } else toast.error(d.message);
+    if (d.success) {
+      if (d.connected) { toast.success(`${provider}: ${d.message || 'Connected successfully!'}`); }
+      else { toast.error(`${provider}: ${d.message || 'Key saved but validation failed. Not marked as connected.'}`); }
+      fetchIntegrations();
+    } else toast.error(d.message);
     setSaving('');
   };
 
@@ -578,6 +582,7 @@ function IntegrationsView() {
     const d = await api('integrations/test', { method: 'POST', body: JSON.stringify({ provider }) });
     if (d.success && d.connected) toast.success(`${provider}: ${d.message}`);
     else toast.error(`${provider}: ${d.message || 'Connection failed'}`);
+    fetchIntegrations();
     setTesting('');
   };
 
