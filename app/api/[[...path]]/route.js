@@ -80,84 +80,100 @@ async function handleDeleteProject(id, userId) {
 
 // ==================== PIPELINE STEPS ====================
 async function handleEvaluateIdea(id, userId) {
-  const db = await getDb();
-  const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
-  if (!project) return error('Project not found', 'NOT_FOUND', 404);
-  const evaluation = await openaiService.evaluateIdea(project.concept, userId);
-  await db.collection('projects').updateOne({ _id: id }, { $set: { idea_evaluation: evaluation, status: 'idea_evaluated', updated_at: new Date() } });
-  return json({ success: true, evaluation, status: 'idea_evaluated' });
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    const evaluation = await openaiService.evaluateIdea(project.concept, userId);
+    await db.collection('projects').updateOne({ _id: id }, { $set: { idea_evaluation: evaluation, status: 'idea_evaluated', updated_at: new Date() } });
+    return json({ success: true, evaluation, status: 'idea_evaluated' });
+  } catch (e) { return error(e.message, 'EVALUATE_ERROR', 500); }
 }
 
 async function handleGenerateScript(id, userId) {
-  const db = await getDb();
-  const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
-  if (!project) return error('Project not found', 'NOT_FOUND', 404);
-  const script = await openaiService.generateScript(project.concept, project.duration_seconds, project.content_style, project.language, userId);
-  await db.collection('projects').updateOne({ _id: id }, { $set: { script, status: 'script_ready', updated_at: new Date() } });
-  return json({ success: true, script, status: 'script_ready' });
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    const script = await openaiService.generateScript(project.concept, project.duration_seconds, project.content_style, project.language, userId);
+    await db.collection('projects').updateOne({ _id: id }, { $set: { script, status: 'script_ready', updated_at: new Date() } });
+    return json({ success: true, script, status: 'script_ready' });
+  } catch (e) { return error(e.message, 'SCRIPT_ERROR', 500); }
 }
 
 async function handleGenerateScenes(id, userId) {
-  const db = await getDb();
-  const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
-  if (!project) return error('Project not found', 'NOT_FOUND', 404);
-  const scriptText = project.script?.full_script || project.concept;
-  const scenesData = await openaiService.generateScenes(scriptText, project.duration_seconds, project.aspect_ratio, userId);
-  await db.collection('projects').updateOne({ _id: id }, { $set: { scenes: scenesData.scenes || scenesData, status: 'scenes_ready', updated_at: new Date() } });
-  return json({ success: true, scenes: scenesData, status: 'scenes_ready' });
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    const scriptText = project.script?.full_script || project.concept;
+    const scenesData = await openaiService.generateScenes(scriptText, project.duration_seconds, project.aspect_ratio, userId);
+    await db.collection('projects').updateOne({ _id: id }, { $set: { scenes: scenesData.scenes || scenesData, status: 'scenes_ready', updated_at: new Date() } });
+    return json({ success: true, scenes: scenesData, status: 'scenes_ready' });
+  } catch (e) { return error(e.message, 'SCENES_ERROR', 500); }
 }
 
 async function handleGenerateVideo(id, userId) {
-  const db = await getDb();
-  const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
-  if (!project) return error('Project not found', 'NOT_FOUND', 404);
-  const scenes = Array.isArray(project.scenes) ? project.scenes : project.scenes?.scenes || [];
-  const result = await heygenService.createVideo(scenes, project.aspect_ratio, userId);
-  await db.collection('projects').updateOne({ _id: id }, { $set: { video_job_id: result.job_id, status: 'video_generating', updated_at: new Date() } });
-  return json({ success: true, job_id: result.job_id, status: 'video_generating' });
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    const scenes = Array.isArray(project.scenes) ? project.scenes : project.scenes?.scenes || [];
+    const result = await heygenService.createVideo(scenes, project.aspect_ratio, userId);
+    await db.collection('projects').updateOne({ _id: id }, { $set: { video_job_id: result.job_id, status: 'video_generating', updated_at: new Date() } });
+    return json({ success: true, job_id: result.job_id, status: 'video_generating' });
+  } catch (e) { return error(e.message, 'VIDEO_ERROR', 500); }
 }
 
 async function handlePollVideoJob(jobId, userId) {
-  const result = await heygenService.getVideoStatus(jobId, userId);
-  if (result.status === 'completed' && result.video_url) {
-    const db = await getDb();
-    await db.collection('projects').updateOne(
-      { video_job_id: jobId, user_id: userId },
-      { $set: { video_url: result.video_url, status: 'video_ready', updated_at: new Date() } }
-    );
-  }
-  return json({ success: true, ...result });
+  try {
+    const result = await heygenService.getVideoStatus(jobId, userId);
+    if (result.status === 'completed' && result.video_url) {
+      const db = await getDb();
+      await db.collection('projects').updateOne(
+        { video_job_id: jobId, user_id: userId },
+        { $set: { video_url: result.video_url, status: 'video_ready', updated_at: new Date() } }
+      );
+    }
+    return json({ success: true, ...result });
+  } catch (e) { return error(e.message, 'POLL_ERROR', 500); }
 }
 
 async function handleGenerateMetadata(id, userId) {
-  const db = await getDb();
-  const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
-  if (!project) return error('Project not found', 'NOT_FOUND', 404);
-  const metadata = await openaiService.generateMetadata(project.concept, project.script?.full_script, userId);
-  await db.collection('projects').updateOne({ _id: id }, { $set: { metadata, status: 'metadata_ready', updated_at: new Date() } });
-  return json({ success: true, metadata, status: 'metadata_ready' });
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    const metadata = await openaiService.generateMetadata(project.concept, project.script?.full_script, userId);
+    await db.collection('projects').updateOne({ _id: id }, { $set: { metadata, status: 'metadata_ready', updated_at: new Date() } });
+    return json({ success: true, metadata, status: 'metadata_ready' });
+  } catch (e) { return error(e.message, 'METADATA_ERROR', 500); }
 }
 
 async function handlePublishYoutube(id, userId) {
-  const db = await getDb();
-  const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
-  if (!project) return error('Project not found', 'NOT_FOUND', 404);
-  const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
-  const accessToken = ytInt?.config_json?.access_token;
-  const result = await youtubeService.uploadVideo(accessToken, project.video_url, project.metadata || {});
-  await db.collection('projects').updateOne({ _id: id }, { $set: { youtube_video_id: result.video_id, status: 'youtube_uploaded', updated_at: new Date() } });
-  return json({ success: true, ...result, status: 'youtube_uploaded' });
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
+    const accessToken = ytInt?.config_json?.access_token;
+    const result = await youtubeService.uploadVideo(accessToken, project.video_url, project.metadata || {});
+    await db.collection('projects').updateOne({ _id: id }, { $set: { youtube_video_id: result.video_id, status: 'youtube_uploaded', updated_at: new Date() } });
+    return json({ success: true, ...result, status: 'youtube_uploaded' });
+  } catch (e) { return error(e.message, 'UPLOAD_ERROR', 500); }
 }
 
 async function handleScheduleYoutube(id, userId) {
-  const db = await getDb();
-  const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
-  if (!project) return error('Project not found', 'NOT_FOUND', 404);
-  const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
-  const accessToken = ytInt?.config_json?.access_token;
-  const result = await youtubeService.scheduleVideo(accessToken, project.youtube_video_id, project.schedule_at);
-  await db.collection('projects').updateOne({ _id: id }, { $set: { status: 'scheduled', updated_at: new Date() } });
-  return json({ success: true, ...result, status: 'scheduled' });
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
+    const accessToken = ytInt?.config_json?.access_token;
+    const result = await youtubeService.scheduleVideo(accessToken, project.youtube_video_id, project.schedule_at);
+    await db.collection('projects').updateOne({ _id: id }, { $set: { status: 'scheduled', updated_at: new Date() } });
+    return json({ success: true, ...result, status: 'scheduled' });
+  } catch (e) { return error(e.message, 'SCHEDULE_ERROR', 500); }
 }
 
 async function handleRunPipeline(id, userId) {

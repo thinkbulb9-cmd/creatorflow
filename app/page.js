@@ -419,16 +419,18 @@ function ProjectDetailView({ projectId, onNavigate }) {
   const runStep = async (action) => {
     setActionLoading(action);
     const d = await api(`projects/${projectId}/${action}`, { method: 'POST' });
-    if (d.success) { toast.success(`${action} completed`); await fetchProject(); }
+    if (d.success) toast.success(`${action} completed`);
     else toast.error(d.message || 'Step failed');
+    await fetchProject();
     setActionLoading('');
   };
 
   const runPipeline = async () => {
     setActionLoading('pipeline');
     const d = await api(`projects/${projectId}/run-pipeline`, { method: 'POST' });
-    if (d.success) { toast.success('Pipeline completed!'); await fetchProject(); }
+    if (d.success) toast.success('Pipeline completed!');
     else toast.error(d.message || 'Pipeline failed');
+    await fetchProject();
     setActionLoading('');
   };
 
@@ -449,7 +451,7 @@ function ProjectDetailView({ projectId, onNavigate }) {
             <Badge variant="outline" className="text-xs">{project.language}</Badge>
             <Badge variant="outline" className="text-xs">{project.content_style}</Badge>
             <Badge className={cn("text-xs text-white", STATUS_COLORS[project.status])}>{STATUS_LABELS[project.status]}</Badge>
-            {project.status !== 'failed' && project.idea_evaluation?.is_mock && <Badge variant="outline" className="text-xs text-amber-400 border-amber-400/50">Mock Mode</Badge>}
+            
           </div>
         </div>
         <Button onClick={runPipeline} disabled={!!actionLoading} className="bg-gradient-to-r from-violet-600 to-indigo-600">
@@ -666,10 +668,10 @@ function IntegrationsView() {
       <Card className="border-border/50 mt-6 bg-accent/20">
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
-            <Sparkles className="h-5 w-5 text-violet-400 mt-0.5 flex-shrink-0" />
+            <Zap className="h-5 w-5 text-green-400 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-sm font-medium">Mock Mode Active</p>
-              <p className="text-xs text-muted-foreground mt-1">When integrations are not connected, CreatorFlow uses realistic mock data so you can preview the full pipeline. Connect your API keys above to generate real content.</p>
+              <p className="text-sm font-medium">Live Mode</p>
+              <p className="text-xs text-muted-foreground mt-1">All integrations run against real APIs. Connect your API keys above to enable each pipeline step. Steps will fail with a clear error if the required integration is not connected.</p>
             </div>
           </div>
         </CardContent>
