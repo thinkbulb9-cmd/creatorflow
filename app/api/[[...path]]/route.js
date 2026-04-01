@@ -1344,6 +1344,9 @@ async function handleYoutubeCallback(request) {
     );
     
     console.log('[YouTube OAuth] Tokens received successfully');
+    console.log('[YouTube OAuth] Has access_token:', !!tokens.access_token);
+    console.log('[YouTube OAuth] Has refresh_token:', !!tokens.refresh_token);
+    console.log('[YouTube OAuth] Token expires_in:', tokens.expires_in, 'seconds');
     
     // Get channel info
     console.log('[YouTube OAuth] Fetching channel info...');
@@ -1353,19 +1356,27 @@ async function handleYoutubeCallback(request) {
     
     // Save tokens and channel info to integration
     const db = await getDb();
+    
+    const tokenData = {
+      ...integration.config_json,
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      token_type: tokens.token_type,
+      expires_in: tokens.expires_in,
+      expires_at: Date.now() + (tokens.expires_in * 1000),
+      channel_info: channelInfo
+    };
+    
+    console.log('[YouTube OAuth] Saving tokens to database...');
+    console.log('[YouTube OAuth] Will save access_token:', !!tokenData.access_token);
+    console.log('[YouTube OAuth] Will save refresh_token:', !!tokenData.refresh_token);
+    console.log('[YouTube OAuth] Will save expires_at:', new Date(tokenData.expires_at).toISOString());
+    
     await db.collection('integrations').updateOne(
       { user_id: userId, provider: 'youtube' },
       {
         $set: {
-          config_json: {
-            ...integration.config_json,
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token,
-            token_type: tokens.token_type,
-            expires_in: tokens.expires_in,
-            expires_at: Date.now() + (tokens.expires_in * 1000),
-            channel_info: channelInfo
-          },
+          config_json: tokenData,
           is_connected: true,
           updated_at: new Date()
         }
@@ -1373,6 +1384,12 @@ async function handleYoutubeCallback(request) {
     );
     
     console.log('[YouTube OAuth] Integration updated successfully');
+    
+    // Verify save
+    const savedInt = await db.collection('integrations').findOne({ user_id: userId, provider: 'youtube' });
+    console.log('[YouTube OAuth] VERIFICATION - Saved access_token exists:', !!savedInt?.config_json?.access_token);
+    console.log('[YouTube OAuth] VERIFICATION - Saved refresh_token exists:', !!savedInt?.config_json?.refresh_token);
+    console.log('[YouTube OAuth] VERIFICATION - Saved expires_at:', savedInt?.config_json?.expires_at);
     
     // Redirect back to app with success
     return NextResponse.redirect(`${baseUrl}/?youtube_callback=success&channel=${encodeURIComponent(channelInfo.title)}`);
