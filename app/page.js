@@ -68,10 +68,6 @@ export default function App() {
   const [validation, setValidation] = useState(null);
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const [projectFilter, setProjectFilter] = useState('all'); // all, draft, running, published, scheduled, failed
-  
-  // NEW: Idea editing states
-  const [editingConcept, setEditingConcept] = useState(false);
-  const [editedConcept, setEditedConcept] = useState('');
 
   // Fetch data on mount
   useEffect(() => {
@@ -733,9 +729,13 @@ export default function App() {
             onDelete={deleteProject}
             onRunStep={runPipelineStep}
             onSelectThumbnail={selectThumbnail}
+            onUpdateConcept={updateProjectConcept}
+            onApplySuggestedTopic={applySuggestedTopic}
+            onRunFullPipeline={runFullPipeline}
             loading={loading}
             pollingVideo={pollingVideo}
             youtubeStatus={youtubeStatus}
+            pipelineRunning={pipelineRunning}
             calculateProgress={calculateProgress}
             getCurrentStep={getCurrentStep}
           />
@@ -1641,7 +1641,26 @@ function CreateProjectView({ projectForm, setProjectForm, languages, voices, ava
 }
 
 // ==================== PROJECT DETAIL VIEW ====================
-function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumbnail, loading, pollingVideo, youtubeStatus, calculateProgress, getCurrentStep }) {
+function ProjectDetailView({ 
+  project, 
+  onBack, 
+  onDelete, 
+  onRunStep, 
+  onSelectThumbnail, 
+  onUpdateConcept,
+  onApplySuggestedTopic,
+  onRunFullPipeline,
+  loading, 
+  pollingVideo, 
+  youtubeStatus, 
+  pipelineRunning,
+  calculateProgress, 
+  getCurrentStep 
+}) {
+  // Local states for concept editing
+  const [editingConcept, setEditingConcept] = useState(false);
+  const [editedConcept, setEditedConcept] = useState('');
+  
   const progress = calculateProgress(project);
   const currentStep = getCurrentStep(project);
 
@@ -1842,7 +1861,7 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
                                 <div className="flex gap-2">
                                   <Button
                                     size="sm"
-                                    onClick={() => updateProjectConcept(project._id, editedConcept)}
+                                    onClick={() => onUpdateConcept(project._id, editedConcept)}
                                     disabled={loading || !editedConcept.trim()}
                                     className="bg-violet-600 hover:bg-violet-700 text-xs"
                                   >
@@ -1880,7 +1899,7 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
                             {step.data.suggested_topics.map((topic, i) => (
                               <button
                                 key={i}
-                                onClick={() => applySuggestedTopic(project._id, topic)}
+                                onClick={() => onApplySuggestedTopic(project._id, topic)}
                                 className="w-full text-left bg-slate-900/50 hover:bg-slate-900/80 p-3 rounded-lg transition-colors border border-slate-700 hover:border-violet-500"
                               >
                                 <div className="text-sm text-slate-200 font-medium flex items-center gap-2">
@@ -1959,7 +1978,7 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
                           </div>
                         </div>
                         <Button
-                          onClick={() => runFullPipeline(project._id)}
+                          onClick={() => onRunFullPipeline(project._id)}
                           disabled={loading || pipelineRunning}
                           className="w-full bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-700 hover:to-blue-700 text-white font-semibold"
                         >
