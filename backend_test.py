@@ -8,10 +8,11 @@ import requests
 import json
 import time
 import uuid
+import os
 from datetime import datetime, timedelta
 
-# Configuration
-BASE_URL = "https://youtube-pipeline-1.preview.emergentagent.com"
+# Configuration - Read from environment variable
+BASE_URL = os.environ.get('NEXT_PUBLIC_BASE_URL', 'http://localhost:3000')
 API_BASE = f"{BASE_URL}/api"
 
 class CreatorFlowAPITester:
