@@ -891,10 +891,50 @@ async function handleYoutubeCallback(request, userId) {
     const code = searchParams.get('code');
     if (!code) return error('Missing code', 'MISSING_CODE');
     
+    // Get YouTube integration to get client credentials
+    const integration = await integrationService.getUserIntegration(userId, 'youtube');
+    if (!integration?.config_json?.client_id || !integration?.config_json?.client_secret) {
+      return error('YouTube not configured. Add Client ID and Secret first.', 'NOT_CONFIGURED');
+    }
+    
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+    const redirectUri = `${baseUrl}/api/youtube/callback`;
+    
+    // Exchange code for tokens
+    const tokens = await youtubeService.exchangeCodeForTokens(
+      code,
+      integration.config_json.client_id,
+      integration.config_json.client_secret,
+      redirectUri
+    );
+    
+    // Get channel info
+    const channelInfo = await youtubeService.getChannelInfo(tokens.access_token);
+    
+    // Save tokens and channel info
+    const db = await getDb();
+    await db.collection('integrations').updateOne(
+      { user_id: userId, provider: 'youtube' },
+      {
+        $set: {
+          config_json: {
+            ...integration.config_json,
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+            expires_at: Date.now() + (tokens.expires_in * 1000),
+            channel_info: channelInfo
+          },
+          is_connected: true,
+          updated_at: new Date()
+        }
+      }
+    );
+    
     return NextResponse.redirect(`${baseUrl}/?youtube_callback=success`);
   } catch (e) { 
-    return error(e.message, 'CALLBACK_ERROR', 500); 
+    console.error('[YouTube OAuth] Callback error:', e);
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+    return NextResponse.redirect(`${baseUrl}/?youtube_callback=error&message=${encodeURIComponent(e.message)}`);
   }
 }
 
