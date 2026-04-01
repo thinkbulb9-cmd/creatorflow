@@ -963,12 +963,11 @@ export default function App() {
             {voices.length > 0 && (
               <div>
                 <Label>Voice (Optional)</Label>
-                <Select value={projectForm.selected_voice_id} onValueChange={v => setProjectForm(p => ({ ...p, selected_voice_id: v }))}>
+                <Select value={projectForm.selected_voice_id || undefined} onValueChange={v => setProjectForm(p => ({ ...p, selected_voice_id: v }))}>
                   <SelectTrigger className="bg-slate-800 border-slate-700">
                     <SelectValue placeholder="Auto-select from language" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Auto-select</SelectItem>
                     {voices.map(voice => (
                       <SelectItem key={voice.voice_id} value={voice.voice_id}>
                         {voice.voice_name} ({voice.language}, {voice.gender})
@@ -982,12 +981,11 @@ export default function App() {
             {avatars.length > 0 && (
               <div>
                 <Label>Avatar (Optional)</Label>
-                <Select value={projectForm.selected_avatar_id} onValueChange={v => setProjectForm(p => ({ ...p, selected_avatar_id: v }))}>
+                <Select value={projectForm.selected_avatar_id || undefined} onValueChange={v => setProjectForm(p => ({ ...p, selected_avatar_id: v }))}>
                   <SelectTrigger className="bg-slate-800 border-slate-700">
                     <SelectValue placeholder="Auto-select first available" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">Auto-select</SelectItem>
                     {avatars.map(avatar => (
                       <SelectItem key={avatar.avatar_id} value={avatar.avatar_id}>
                         {avatar.avatar_name} ({avatar.gender})
