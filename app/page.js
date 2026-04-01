@@ -365,20 +365,22 @@ export default function App() {
     if (data.success) {
       toast.success('Concept updated! Re-evaluate to get new insights.');
       setSelectedProject(data.project);
-      setEditingConcept(false);
-      setEditedConcept('');
       fetchProjects();
+      setLoading(false);
+      return { success: true, project: data.project };
     } else {
       toast.error(data.error || 'Failed to update concept');
+      setLoading(false);
+      return { success: false };
     }
-    setLoading(false);
   };
   
   // NEW: Apply suggested topic
   const applySuggestedTopic = async (projectId, suggestedTopic) => {
     if (confirm(`Replace current concept with: "${suggestedTopic}"?`)) {
-      await updateProjectConcept(projectId, suggestedTopic);
+      return await updateProjectConcept(projectId, suggestedTopic);
     }
+    return { success: false };
   };
 
 
@@ -1861,7 +1863,13 @@ function ProjectDetailView({
                                 <div className="flex gap-2">
                                   <Button
                                     size="sm"
-                                    onClick={() => onUpdateConcept(project._id, editedConcept)}
+                                    onClick={async () => {
+                                      const result = await onUpdateConcept(project._id, editedConcept);
+                                      if (result?.success) {
+                                        setEditingConcept(false);
+                                        setEditedConcept('');
+                                      }
+                                    }}
                                     disabled={loading || !editedConcept.trim()}
                                     className="bg-violet-600 hover:bg-violet-700 text-xs"
                                   >
@@ -1899,7 +1907,13 @@ function ProjectDetailView({
                             {step.data.suggested_topics.map((topic, i) => (
                               <button
                                 key={i}
-                                onClick={() => onApplySuggestedTopic(project._id, topic)}
+                                onClick={async () => {
+                                  const result = await onApplySuggestedTopic(project._id, topic);
+                                  if (result?.success) {
+                                    setEditingConcept(false);
+                                    setEditedConcept('');
+                                  }
+                                }}
                                 className="w-full text-left bg-slate-900/50 hover:bg-slate-900/80 p-3 rounded-lg transition-colors border border-slate-700 hover:border-violet-500"
                               >
                                 <div className="text-sm text-slate-200 font-medium flex items-center gap-2">
