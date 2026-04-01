@@ -26,6 +26,12 @@ export default function App() {
   const [voices, setVoices] = useState([]);
   const [avatars, setAvatars] = useState([]);
   
+  // Login form states
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  
   // Form states
   const [showNewProject, setShowNewProject] = useState(false);
   const [selectedProject, setSelectedProject] = useState(null);
@@ -284,6 +290,26 @@ export default function App() {
     return 'destructive';
   };
 
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginLoading(true);
+    setLoginError('');
+    
+    const result = await signIn('credentials', {
+      email: loginEmail,
+      password: loginPassword,
+      redirect: false
+    });
+    
+    if (result?.error) {
+      setLoginError('Invalid email or password');
+      setLoginLoading(false);
+    } else {
+      // Successful login - NextAuth will handle the session
+      window.location.href = '/';
+    }
+  };
+
   // Auth check
   if (status === 'loading') {
     return (
@@ -309,9 +335,46 @@ export default function App() {
             </div>
           </CardHeader>
           <CardContent>
-            <Button onClick={() => signIn()} className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700">
-              Sign In
-            </Button>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <Label className="text-white">Email</Label>
+                <Input
+                  type="email"
+                  placeholder="your@email.com"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  required
+                  className="bg-slate-800 border-slate-700 text-white"
+                />
+              </div>
+              <div>
+                <Label className="text-white">Password</Label>
+                <Input
+                  type="password"
+                  placeholder="••••••••"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  required
+                  className="bg-slate-800 border-slate-700 text-white"
+                />
+              </div>
+              {loginError && (
+                <div className="text-sm text-red-400 bg-red-950/20 border border-red-900 rounded p-2">
+                  {loginError}
+                </div>
+              )}
+              <Button 
+                type="submit" 
+                disabled={loginLoading}
+                className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700"
+              >
+                {loginLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Sign In
+              </Button>
+              <div className="text-center text-sm text-slate-400">
+                Test credentials: testuser@creatorflow.ai / TestPassword123!
+              </div>
+            </form>
           </CardContent>
         </Card>
       </div>
