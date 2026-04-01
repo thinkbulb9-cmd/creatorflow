@@ -1056,8 +1056,8 @@ function IntegrationsView({ integrations, youtubeStatus, keys, setKeys, showKeys
                 <CardTitle className="text-white">YouTube</CardTitle>
                 <CardDescription className="text-xs">Upload videos and schedule publishing</CardDescription>
               </div>
-              <Badge variant={youtubeStatus?.connected ? 'default' : 'secondary'}>
-                {youtubeStatus?.connected ? 'Connected' : 'Not Connected'}
+              <Badge variant={youtubeStatus?.has_access_token ? 'default' : 'secondary'}>
+                {youtubeStatus?.has_access_token ? 'Connected' : youtubeStatus?.has_credentials ? 'Credentials Saved' : 'Not Connected'}
               </Badge>
             </div>
           </CardHeader>

@@ -875,8 +875,10 @@ async function handleDashboardStats(userId) {
 async function handleYoutubeAuth(userId) {
   const integration = await integrationService.getUserIntegration(userId, 'youtube');
   const clientId = integration?.config_json?.client_id;
-  if (!clientId) {
-    return error('YouTube not configured. Add Client ID in Integrations.', 'NOT_CONFIGURED');
+  const clientSecret = integration?.config_json?.client_secret;
+  
+  if (!clientId || !clientSecret) {
+    return error('YouTube credentials not found. Please save your Client ID and Client Secret in the Integrations tab first.', 'NOT_CONFIGURED');
   }
   
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
