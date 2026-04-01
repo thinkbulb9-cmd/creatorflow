@@ -614,31 +614,97 @@ async function handlePublishYoutube(id, userId) {
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
     
+    // Validate pipeline dependencies
     const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
     if (!pipelineService.canRunStep('upload', pipelineState)) {
-      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+      return error('Previous steps must be completed first. Complete metadata generation before upload.', 'DEPENDENCY_ERROR', 400);
     }
     
+    // STRICT: Check if video URL exists
+    if (!project.video_url) {
+      return error('No video file found. Generate video first.', 'NO_VIDEO', 400);
+    }
+    
+    // STRICT: Check if metadata exists
+    if (!project.metadata || !project.metadata.title) {
+      return error('No metadata found. Generate metadata first.', 'NO_METADATA', 400);
+    }
+    
+    // STRICT: Check YouTube OAuth
+    const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
+    if (!ytInt || !ytInt.config_json?.access_token) {
+      return error('YouTube not connected. Please connect your YouTube account in Integrations.', 'YOUTUBE_NOT_CONNECTED', 403);
+    }
+    
+    const accessToken = ytInt.config_json.access_token;
+    
+    console.log('[YouTube Upload] Starting REAL upload for project:', id);
+    console.log('[YouTube Upload] Video URL:', project.video_url);
+    console.log('[YouTube Upload] Metadata:', project.metadata.title);
+    
+    // Mark step as running
     const updatedState = pipelineService.markStepRunning(pipelineState, 'upload');
     await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
     
-    const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
-    const accessToken = ytInt?.config_json?.access_token;
-    
-    const result = await youtubeService.uploadVideo(
+    // REAL YouTube Upload - No Mocks
+    const uploadResult = await youtubeService.uploadVideo(
       accessToken, 
       project.video_url, 
-      project.metadata || {}
+      {
+        title: project.metadata.title,
+        description: project.metadata.description,
+        tags: project.metadata.tags,
+        category_id: '22',
+        privacy_status: project.publishing_mode === 'instant' ? 'public' : 'private'
+      }
     );
     
+    console.log('[YouTube Upload] SUCCESS - Real video ID:', uploadResult.video_id);
+    
+    // Mark step as completed with REAL data
     const completedState = pipelineService.markStepCompleted(updatedState, 'upload');
+    
     await db.collection('projects').updateOne(
       { _id: id }, 
-      { $set: { youtube_video_id: result.video_id, pipeline_state: completedState, updated_at: new Date() } }
+      { 
+        $set: { 
+          youtube_video_id: uploadResult.video_id,
+          youtube_url: uploadResult.url,
+          upload_status: 'uploaded',
+          uploaded_at: uploadResult.uploaded_at,
+          pipeline_state: completedState, 
+          updated_at: new Date() 
+        } 
+      }
     );
     
-    return json({ success: true, ...result });
+    // If instant publish mode, also mark schedule as completed
+    if (project.publishing_mode === 'instant') {
+      const instantPublishState = pipelineService.markStepCompleted(completedState, 'schedule');
+      await db.collection('projects').updateOne(
+        { _id: id },
+        {
+          $set: {
+            pipeline_state: instantPublishState,
+            published_at: new Date(),
+            status: 'published'
+          }
+        }
+      );
+    }
+    
+    return json({ 
+      success: true, 
+      video_id: uploadResult.video_id,
+      url: uploadResult.url,
+      uploaded_at: uploadResult.uploaded_at,
+      status: uploadResult.status,
+      message: 'Video uploaded successfully to YouTube!'
+    });
+    
   } catch (e) {
+    console.error('[YouTube Upload] FAILED:', e);
+    
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id });
     if (project) {
@@ -646,11 +712,22 @@ async function handlePublishYoutube(id, userId) {
       await db.collection('projects').updateOne(
         { _id: id },
         { 
-          $set: { pipeline_state: failedState },
-          $push: { provider_errors: { step: 'upload', error: e.message, timestamp: new Date() } }
+          $set: { 
+            pipeline_state: failedState,
+            upload_status: 'failed',
+            upload_error: e.message
+          },
+          $push: { 
+            provider_errors: { 
+              step: 'upload', 
+              error: e.message, 
+              timestamp: new Date() 
+            } 
+          }
         }
       );
     }
+    
     return error(e.message, 'UPLOAD_ERROR', 500);
   }
 }
@@ -661,44 +738,110 @@ async function handleScheduleYoutube(id, userId) {
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
     
-    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
-    if (!pipelineService.canRunStep('schedule', pipelineState)) {
-      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+    // STRICT: Only allow scheduling for scheduled mode
+    if (project.publishing_mode !== 'scheduled') {
+      return error('Schedule publishing is only available for Scheduled mode projects.', 'INVALID_MODE', 400);
     }
     
+    // STRICT: Validate upload completed first
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    if (pipelineState.upload?.status !== 'completed') {
+      return error('Video must be uploaded to YouTube before scheduling. Complete Upload step first.', 'UPLOAD_NOT_COMPLETE', 400);
+    }
+    
+    // STRICT: Check if real YouTube video ID exists
+    if (!project.youtube_video_id || project.youtube_video_id.startsWith('mock_')) {
+      return error('No real YouTube video ID found. Upload must complete successfully first.', 'NO_REAL_VIDEO_ID', 400);
+    }
+    
+    // STRICT: Check if schedule date/time exists
+    if (!project.schedule_date || !project.schedule_time) {
+      return error('Schedule date and time are required for scheduled publishing.', 'MISSING_SCHEDULE', 400);
+    }
+    
+    // STRICT: Check YouTube OAuth
+    const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
+    if (!ytInt || !ytInt.config_json?.access_token) {
+      return error('YouTube not connected. Please connect your YouTube account in Integrations.', 'YOUTUBE_NOT_CONNECTED', 403);
+    }
+    
+    const accessToken = ytInt.config_json.access_token;
+    
+    // Combine date and time into ISO timestamp
+    const scheduleDateTime = new Date(`${project.schedule_date}T${project.schedule_time}`);
+    
+    // Validate future date
+    if (scheduleDateTime <= new Date()) {
+      return error('Schedule time must be in the future.', 'INVALID_SCHEDULE_TIME', 400);
+    }
+    
+    console.log('[YouTube Schedule] Scheduling video:', project.youtube_video_id);
+    console.log('[YouTube Schedule] Publish at:', scheduleDateTime.toISOString());
+    
+    // Mark step as running
     const updatedState = pipelineService.markStepRunning(pipelineState, 'schedule');
     await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
     
-    const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
-    const accessToken = ytInt?.config_json?.access_token;
-    
-    const scheduleDateTime = `${project.schedule_date}T${project.schedule_time}`;
-    const result = await youtubeService.scheduleVideo(
-      accessToken, 
-      project.youtube_video_id, 
+    // REAL YouTube Scheduling
+    const scheduleResult = await youtubeService.scheduleVideo(
+      accessToken,
+      project.youtube_video_id,
       scheduleDateTime
     );
     
+    console.log('[YouTube Schedule] SUCCESS - Scheduled for:', scheduleResult.publish_at);
+    
+    // Mark step as completed
     const completedState = pipelineService.markStepCompleted(updatedState, 'schedule');
+    
     await db.collection('projects').updateOne(
-      { _id: id }, 
-      { $set: { pipeline_state: completedState, status: 'scheduled', updated_at: new Date() } }
+      { _id: id },
+      {
+        $set: {
+          schedule_status: 'scheduled',
+          scheduled_at: scheduleResult.scheduled_at,
+          publish_at: scheduleResult.publish_at,
+          pipeline_state: completedState,
+          status: 'scheduled',
+          updated_at: new Date()
+        }
+      }
     );
     
-    return json({ success: true, ...result });
+    return json({
+      success: true,
+      scheduled_at: scheduleResult.scheduled_at,
+      publish_at: scheduleResult.publish_at,
+      status: 'scheduled',
+      message: `Video scheduled to publish on ${scheduleDateTime.toLocaleString()}`
+    });
+    
   } catch (e) {
+    console.error('[YouTube Schedule] FAILED:', e);
+    
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id });
     if (project) {
       const failedState = pipelineService.markStepFailed(project.pipeline_state, 'schedule', e.message);
       await db.collection('projects').updateOne(
         { _id: id },
-        { 
-          $set: { pipeline_state: failedState },
-          $push: { provider_errors: { step: 'schedule', error: e.message, timestamp: new Date() } }
+        {
+          $set: {
+            pipeline_state: failedState,
+            schedule_status: 'failed',
+            schedule_error: e.message
+          },
+          $push: {
+            provider_errors: {
+              step: 'schedule',
+              error: e.message,
+              timestamp: new Date()
+            }
+          }
         }
       );
     }
+    
     return error(e.message, 'SCHEDULE_ERROR', 500);
   }
 }

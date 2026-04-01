@@ -46,7 +46,7 @@ export default function App() {
     aspect_ratio: '16:9',
     language: 'English',
     content_style: 'professional',
-    publishing_mode: 'draft',
+    publishing_mode: 'draft', // draft, scheduled, instant
     schedule_date: '',
     schedule_time: '',
     selected_voice_id: '',
@@ -210,6 +210,20 @@ export default function App() {
   };
 
   const createProject = async () => {
+    // Validate scheduled mode requirements
+    if (projectForm.publishing_mode === 'scheduled') {
+      if (!projectForm.schedule_date || !projectForm.schedule_time) {
+        toast.error('Please select date and time for scheduled publishing');
+        return;
+      }
+      
+      const scheduleDateTime = new Date(`${projectForm.schedule_date}T${projectForm.schedule_time}`);
+      if (scheduleDateTime <= new Date()) {
+        toast.error('Schedule time must be in the future');
+        return;
+      }
+    }
+    
     setLoading(true);
     const data = await api('projects', { method: 'POST', body: JSON.stringify(projectForm) });
     if (data.success) {
@@ -1389,39 +1403,58 @@ function CreateProjectView({ projectForm, setProjectForm, languages, voices, ava
           )}
 
           <div>
-            <Label className="text-white">Publishing Mode</Label>
+            <Label className="text-white">Publishing Mode *</Label>
             <Select value={projectForm.publishing_mode} onValueChange={v => setProjectForm(p => ({ ...p, publishing_mode: v }))}>
               <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="draft">Draft (Save only)</SelectItem>
-                <SelectItem value="immediate">Publish Immediately</SelectItem>
-                <SelectItem value="scheduled">Schedule for Later</SelectItem>
+                <SelectItem value="draft">Draft (No publishing)</SelectItem>
+                <SelectItem value="scheduled">Scheduled (Choose date & time)</SelectItem>
+                <SelectItem value="instant">Instant Publish (Publish immediately)</SelectItem>
               </SelectContent>
             </Select>
+            <p className="text-xs text-slate-400 mt-1">
+              {projectForm.publishing_mode === 'draft' && 'Content will be generated but not published'}
+              {projectForm.publishing_mode === 'scheduled' && 'Video will be uploaded and published at your chosen time'}
+              {projectForm.publishing_mode === 'instant' && 'Video will be uploaded and published immediately'}
+            </p>
           </div>
 
           {projectForm.publishing_mode === 'scheduled' && (
-            <div className="grid md:grid-cols-2 gap-4">
-              <div>
-                <Label className="text-white">Schedule Date</Label>
-                <Input
-                  type="date"
-                  value={projectForm.schedule_date}
-                  onChange={e => setProjectForm(p => ({ ...p, schedule_date: e.target.value }))}
-                  className="bg-slate-900 border-slate-700 text-white mt-2"
-                />
+            <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4 space-y-4">
+              <div className="text-sm font-semibold text-white flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-violet-400" />
+                Schedule Publishing Date & Time
               </div>
-              <div>
-                <Label className="text-white">Schedule Time</Label>
-                <Input
-                  type="time"
-                  value={projectForm.schedule_time}
-                  onChange={e => setProjectForm(p => ({ ...p, schedule_time: e.target.value }))}
-                  className="bg-slate-900 border-slate-700 text-white mt-2"
-                />
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-white">Date *</Label>
+                  <Input
+                    type="date"
+                    value={projectForm.schedule_date}
+                    onChange={e => setProjectForm(p => ({ ...p, schedule_date: e.target.value }))}
+                    min={new Date().toISOString().split('T')[0]}
+                    required={projectForm.publishing_mode === 'scheduled'}
+                    className="bg-slate-900 border-slate-700 text-white mt-2"
+                  />
+                </div>
+                <div>
+                  <Label className="text-white">Time *</Label>
+                  <Input
+                    type="time"
+                    value={projectForm.schedule_time}
+                    onChange={e => setProjectForm(p => ({ ...p, schedule_time: e.target.value }))}
+                    required={projectForm.publishing_mode === 'scheduled'}
+                    className="bg-slate-900 border-slate-700 text-white mt-2"
+                  />
+                </div>
               </div>
+              {projectForm.schedule_date && projectForm.schedule_time && (
+                <div className="text-xs text-slate-400">
+                  Video will be published on: {new Date(`${projectForm.schedule_date}T${projectForm.schedule_time}`).toLocaleString()}
+                </div>
+              )}
             </div>
           )}
 
@@ -1450,14 +1483,28 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
   const currentStep = getCurrentStep(project);
 
   const pipelineSteps = [
-    { key: 'evaluate', name: 'Idea Evaluation', endpoint: 'evaluate', icon: Award, data: project.idea_evaluation },
-    { key: 'script', name: 'Script Generation', endpoint: 'generate-script', icon: Sparkles, data: project.script_data },
-    { key: 'scenes', name: 'Scene Creation', endpoint: 'generate-scenes', icon: Video, data: project.scenes },
-    { key: 'video', name: 'Video Generation', endpoint: 'generate-video', icon: PlayCircle, data: project.video_url },
-    { key: 'thumbnail', name: 'Thumbnail', endpoint: 'generate-thumbnail', icon: ImageIcon, data: project.thumbnail_data },
-    { key: 'metadata', name: 'Metadata', endpoint: 'generate-metadata', icon: Globe, data: project.metadata },
-    { key: 'upload', name: 'Upload to YouTube', endpoint: 'publish-youtube', icon: Upload, data: project.youtube_video_id },
-    { key: 'schedule', name: 'Schedule Publishing', endpoint: 'schedule-youtube', icon: Calendar, data: project.status === 'scheduled' }
+    { key: 'evaluate', name: 'Idea Evaluation', endpoint: 'evaluate', icon: Award, data: project.idea_evaluation, alwaysShow: true },
+    { key: 'script', name: 'Script Generation', endpoint: 'generate-script', icon: Sparkles, data: project.script_data, alwaysShow: true },
+    { key: 'scenes', name: 'Scene Creation', endpoint: 'generate-scenes', icon: Video, data: project.scenes, alwaysShow: true },
+    { key: 'video', name: 'Video Generation', endpoint: 'generate-video', icon: PlayCircle, data: project.video_url, alwaysShow: true },
+    { key: 'thumbnail', name: 'Thumbnail', endpoint: 'generate-thumbnail', icon: ImageIcon, data: project.thumbnail_data, alwaysShow: true },
+    { key: 'metadata', name: 'Metadata', endpoint: 'generate-metadata', icon: Globe, data: project.metadata, alwaysShow: true },
+    { 
+      key: 'upload', 
+      name: project.publishing_mode === 'draft' ? 'Upload (Optional)' : 'Upload to YouTube', 
+      endpoint: 'publish-youtube', 
+      icon: Upload, 
+      data: project.youtube_video_id,
+      showFor: ['scheduled', 'instant'] // Only show for scheduled and instant modes
+    },
+    { 
+      key: 'schedule', 
+      name: 'Schedule Publishing', 
+      endpoint: 'schedule-youtube', 
+      icon: Calendar, 
+      data: project.status === 'scheduled',
+      showFor: ['scheduled'] // Only show for scheduled mode
+    }
   ];
 
   const getStepStatus = (stepKey) => {
@@ -1477,6 +1524,13 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
     if (score >= 5) return 'text-orange-500';
     return 'text-red-500';
   };
+
+  // Filter steps based on publishing mode
+  const visibleSteps = pipelineSteps.filter(step => {
+    if (step.alwaysShow) return true;
+    if (!step.showFor) return true;
+    return step.showFor.includes(project.publishing_mode);
+  });
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">
@@ -1516,14 +1570,18 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
 
       {/* Pipeline Steps */}
       <div className="space-y-4">
-        {pipelineSteps.map((step, index) => {
+        {visibleSteps.map((step, index) => {
           const status = getStepStatus(step.key);
           const StepIcon = step.icon;
-          const isLocked = index > 0 && getStepStatus(pipelineSteps[index - 1].key) !== 'completed';
+          const isLocked = index > 0 && getStepStatus(visibleSteps[index - 1].key) !== 'completed';
           
           // Special lock for upload/schedule if YouTube not connected
           const isYoutubeStep = step.key === 'upload' || step.key === 'schedule';
           const youtubeNotReady = isYoutubeStep && (!youtubeStatus?.connected || !youtubeStatus?.has_access_token);
+          
+          // For upload step, show real data or blocked state
+          const showUploadBlock = step.key === 'upload' && youtubeNotReady;
+          const showMockWarning = step.key === 'upload' && status === 'completed' && project.youtube_video_id && project.youtube_video_id.startsWith('mock_');
 
           return (
             <Card key={step.key} className={`bg-slate-800/50 border-slate-700 ${(isLocked || youtubeNotReady) ? 'opacity-50' : ''}`}>
@@ -1733,11 +1791,46 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
                     </div>
                   )}
 
-                  {/* Upload Confirmation */}
+                  {/* Upload Display */}
                   {step.key === 'upload' && step.data && (
-                    <div className="bg-green-950/20 border border-green-900 rounded p-3 text-sm text-green-400">
-                      <CheckCircle2 className="h-4 w-4 inline mr-2" />
-                      Video uploaded to YouTube! Video ID: {step.data}
+                    <div className="space-y-2">
+                      {showMockWarning ? (
+                        <div className="bg-red-950/20 border border-red-900 rounded p-3 text-sm text-red-400">
+                          <AlertCircle className="h-4 w-4 inline mr-2" />
+                          ⚠️ MOCK UPLOAD DETECTED - This is not a real YouTube upload. Please connect YouTube OAuth and re-upload.
+                        </div>
+                      ) : (
+                        <div className="bg-green-950/20 border border-green-900 rounded p-3 space-y-2">
+                          <div className="text-sm text-green-400 font-semibold flex items-center gap-2">
+                            <CheckCircle2 className="h-4 w-4" />
+                            Video uploaded to YouTube successfully!
+                          </div>
+                          <div className="text-xs text-slate-300 space-y-1">
+                            <div><strong>Video ID:</strong> {project.youtube_video_id}</div>
+                            {project.youtube_url && (
+                              <div>
+                                <strong>YouTube URL:</strong>{' '}
+                                <a href={project.youtube_url} target="_blank" rel="noopener noreferrer" className="text-violet-400 hover:text-violet-300 underline">
+                                  {project.youtube_url}
+                                </a>
+                              </div>
+                            )}
+                            {project.uploaded_at && (
+                              <div><strong>Uploaded:</strong> {new Date(project.uploaded_at).toLocaleString()}</div>
+                            )}
+                            {youtubeStatus?.channel_info && (
+                              <div><strong>Channel:</strong> {youtubeStatus.channel_info.title}</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {showUploadBlock && (
+                    <div className="bg-orange-950/20 border border-orange-900 rounded p-3 text-sm text-orange-400">
+                      <AlertTriangle className="h-4 w-4 inline mr-2" />
+                      YouTube not connected. Please complete OAuth in Integrations before uploading.
                     </div>
                   )}
 
