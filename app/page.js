@@ -68,6 +68,10 @@ export default function App() {
   const [validation, setValidation] = useState(null);
   const [pipelineRunning, setPipelineRunning] = useState(false);
   const [projectFilter, setProjectFilter] = useState('all'); // all, draft, running, published, scheduled, failed
+  
+  // NEW: Idea editing states
+  const [editingConcept, setEditingConcept] = useState(false);
+  const [editedConcept, setEditedConcept] = useState('');
 
   // Fetch data on mount
   useEffect(() => {
@@ -353,6 +357,34 @@ export default function App() {
       }
     }
   };
+
+  // NEW: Update project concept
+  const updateProjectConcept = async (projectId, newConcept) => {
+    setLoading(true);
+    const data = await api(`projects/${projectId}/update-concept`, {
+      method: 'PATCH',
+      body: JSON.stringify({ concept: newConcept })
+    });
+    
+    if (data.success) {
+      toast.success('Concept updated! Re-evaluate to get new insights.');
+      setSelectedProject(data.project);
+      setEditingConcept(false);
+      setEditedConcept('');
+      fetchProjects();
+    } else {
+      toast.error(data.error || 'Failed to update concept');
+    }
+    setLoading(false);
+  };
+  
+  // NEW: Apply suggested topic
+  const applySuggestedTopic = async (projectId, suggestedTopic) => {
+    if (confirm(`Replace current concept with: "${suggestedTopic}"?`)) {
+      await updateProjectConcept(projectId, suggestedTopic);
+    }
+  };
+
 
   const deleteProject = async (id) => {
     if (!confirm('Delete this project? This action cannot be undone.')) return;
@@ -1765,11 +1797,12 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
                   {/* Evaluation Display */}
                   {step.key === 'evaluate' && step.data && (
                     <div className="space-y-4">
-                      <div className="flex items-center gap-4">
+                      {/* Score and Actions */}
+                      <div className="flex items-start gap-4">
                         <div className={`text-4xl font-bold ${getScoreColor(step.data.score)}`}>
                           {step.data.score}/10
                         </div>
-                        <div className="flex-1 space-y-1">
+                        <div className="flex-1 space-y-2">
                           <div className="flex gap-2 flex-wrap">
                             {step.data.opportunity_level && (
                               <Badge variant="secondary">Opportunity: {step.data.opportunity_level}</Badge>
@@ -1778,8 +1811,90 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
                               <Badge variant="secondary">Competition: {step.data.competition_level}</Badge>
                             )}
                           </div>
+                          
+                          {/* Concept Editing */}
+                          <div className="bg-slate-900/50 p-3 rounded-lg space-y-2">
+                            <div className="flex items-center justify-between">
+                              <Label className="text-xs text-slate-400">Current Concept</Label>
+                              {!editingConcept && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setEditingConcept(true);
+                                    setEditedConcept(project.concept);
+                                  }}
+                                  className="text-xs h-6 px-2"
+                                >
+                                  Edit
+                                </Button>
+                              )}
+                            </div>
+                            
+                            {editingConcept ? (
+                              <div className="space-y-2">
+                                <Input
+                                  value={editedConcept}
+                                  onChange={(e) => setEditedConcept(e.target.value)}
+                                  className="bg-slate-800 border-slate-700 text-sm"
+                                  placeholder="Enter new concept..."
+                                />
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => updateProjectConcept(project._id, editedConcept)}
+                                    disabled={loading || !editedConcept.trim()}
+                                    className="bg-violet-600 hover:bg-violet-700 text-xs"
+                                  >
+                                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                                    Save & Re-evaluate
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      setEditingConcept(false);
+                                      setEditedConcept('');
+                                    }}
+                                    className="text-xs"
+                                  >
+                                    Cancel
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-slate-200">{project.concept}</p>
+                            )}
+                          </div>
                         </div>
                       </div>
+
+                      {/* Suggested Alternative Topics (if score < 7) */}
+                      {step.data.suggested_topics && step.data.suggested_topics.length > 0 && (
+                        <div className="bg-amber-950/20 border border-amber-800/30 p-4 rounded-lg space-y-3">
+                          <h4 className="text-sm font-semibold text-amber-400 flex items-center gap-2">
+                            <Lightbulb className="h-4 w-4" /> 
+                            Suggested Alternative Topics (Click to Use)
+                          </h4>
+                          <div className="space-y-2">
+                            {step.data.suggested_topics.map((topic, i) => (
+                              <button
+                                key={i}
+                                onClick={() => applySuggestedTopic(project._id, topic)}
+                                className="w-full text-left bg-slate-900/50 hover:bg-slate-900/80 p-3 rounded-lg transition-colors border border-slate-700 hover:border-violet-500"
+                              >
+                                <div className="text-sm text-slate-200 font-medium flex items-center gap-2">
+                                  <span className="text-amber-500">→</span>
+                                  {topic}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-xs text-slate-400">
+                            💡 These alternatives may perform better based on current trends and competition
+                          </p>
+                        </div>
+                      )}
 
                       {step.data.strengths && step.data.strengths.length > 0 && (
                         <div>
@@ -1829,6 +1944,43 @@ function ProjectDetailView({ project, onBack, onDelete, onRunStep, onSelectThumb
                           </div>
                         </div>
                       )}
+                      
+                      {/* ONE-CLICK PIPELINE BUTTON */}
+                      <div className="bg-gradient-to-r from-violet-950/50 to-blue-950/50 border-2 border-violet-500/30 p-4 rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                              <Sparkles className="h-4 w-4 text-violet-400" />
+                              Ready to Create Your Video?
+                            </h4>
+                            <p className="text-xs text-slate-400 mt-1">
+                              Click below to automatically run the full pipeline: Script → Scenes → Video → Thumbnail → Metadata → {project.publishing_mode !== 'draft' && 'Upload'}
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          onClick={() => runFullPipeline(project._id)}
+                          disabled={loading || pipelineRunning}
+                          className="w-full bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-700 hover:to-blue-700 text-white font-semibold"
+                        >
+                          {pipelineRunning ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Pipeline Running...
+                            </>
+                          ) : (
+                            <>
+                              <Play className="h-4 w-4 mr-2" />
+                              Run Full Pipeline (One-Click)
+                            </>
+                          )}
+                        </Button>
+                        {pipelineRunning && (
+                          <p className="text-xs text-center text-slate-400 mt-2">
+                            This may take 5-10 minutes. You'll be notified when complete.
+                          </p>
+                        )}
+                      </div>
                     </div>
                   )}
 

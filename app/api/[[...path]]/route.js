@@ -302,6 +302,46 @@ async function handleRunFullPipeline(id, userId) {
   }
 }
 
+async function handleUpdateProjectConcept(id, userId, req) {
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    
+    const body = await req.json();
+    const { concept } = body;
+    
+    if (!concept || !concept.trim()) {
+      return error('Concept cannot be empty', 'INVALID_CONCEPT', 400);
+    }
+    
+    // Update the concept and clear evaluation data to force re-evaluation
+    await db.collection('projects').updateOne(
+      { _id: id },
+      {
+        $set: {
+          concept: concept.trim(),
+          idea_evaluation: null, // Clear old evaluation
+          updated_at: new Date()
+        }
+      }
+    );
+    
+    const updated = await db.collection('projects').findOne({ _id: id });
+    
+    return json({
+      success: true,
+      message: 'Concept updated successfully',
+      project: updated
+    });
+    
+  } catch (e) {
+    console.error('[UpdateConcept] Error:', e);
+    return error(e.message, 'UPDATE_CONCEPT_ERROR', 500);
+  }
+}
+
+
 //  ==================== PIPELINE STEPS WITH CACHING ====================
 async function handleEvaluateIdea(id, userId, forceRegenerate = false) {
   try {
@@ -1660,6 +1700,21 @@ export async function DELETE(request, { params }) {
   
   if (path[0] === 'projects' && path.length === 2) return handleDeleteProject(path[1], userId);
   if (path[0] === 'integrations' && path.length === 2) return handleDeleteIntegration(path[1], userId);
+  
+  return error('Not found', 'NOT_FOUND', 404);
+}
+
+export async function PATCH(request, { params }) {
+  const path = params?.path || [];
+  
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return error('Unauthorized', 'UNAUTHORIZED', 401);
+  const userId = session.user.id;
+  
+  // PATCH /api/projects/:id/update-concept
+  if (path[0] === 'projects' && path.length === 3 && path[2] === 'update-concept') {
+    return handleUpdateProjectConcept(path[1], userId, request);
+  }
   
   return error('Not found', 'NOT_FOUND', 404);
 }
