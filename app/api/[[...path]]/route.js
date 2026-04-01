@@ -436,19 +436,22 @@ async function handleGenerateThumbnail(id, userId, forceRegenerate = false) {
     const updatedState = pipelineService.markStepRunning(pipelineState, 'thumbnail');
     await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
     
-    // Get thumbnail prompt from metadata or generate one
-    const thumbnailPrompt = project.metadata?.thumbnail_prompt || 
-                           `YouTube thumbnail for: ${project.concept}`;
+    // Step 1: Generate strategic thumbnail concept
+    const thumbnailConcept = await openaiService.generateThumbnailConcept(
+      project.concept,
+      project.metadata,
+      userId
+    );
     
-    // Generate thumbnails for all aspect ratios
+    // Step 2: Generate thumbnail images using the strategic prompts
     const images = await openaiService.generateThumbnail(
-      thumbnailPrompt,
+      thumbnailConcept,
       ['16:9', '9:16', '1:1'],
       userId
     );
     
     const thumbnailData = {
-      prompt: thumbnailPrompt,
+      concept: thumbnailConcept,
       images: images,
       selected: images['16:9'], // Default to 16:9
       generated_at: new Date()
@@ -895,6 +898,61 @@ async function handleYoutubeCallback(request, userId) {
   }
 }
 
+// ==================== SETTINGS ====================
+async function handleGetSettings(userId) {
+  const db = await getDb();
+  const user = await db.collection('users').findOne({ _id: userId });
+  
+  const settings = user?.settings || {
+    theme: 'dark',
+    default_language: 'English',
+    default_aspect_ratio: '16:9',
+    default_publishing_mode: 'draft',
+    default_avatar_id: null,
+    default_voice_id: null
+  };
+  
+  return json({ success: true, settings, user: { name: user.name, email: user.email, image: user.image } });
+}
+
+async function handleSaveSettings(req, userId) {
+  try {
+    const body = await req.json();
+    const { settings } = body;
+    
+    const db = await getDb();
+    await db.collection('users').updateOne(
+      { _id: userId },
+      { $set: { settings, updated_at: new Date() } }
+    );
+    
+    return json({ success: true, settings });
+  } catch (e) {
+    return error(e.message, 'SAVE_SETTINGS_ERROR', 500);
+  }
+}
+
+// ==================== YOUTUBE CONNECTION STATUS ====================
+async function handleYoutubeConnectionStatus(userId) {
+  try {
+    const integration = await integrationService.getUserIntegration(userId, 'youtube');
+    const isConnected = integration?.is_connected || false;
+    const hasCredentials = !!(integration?.config_json?.client_id && integration?.config_json?.client_secret);
+    const hasAccessToken = !!integration?.config_json?.access_token;
+    
+    return json({
+      success: true,
+      connected: isConnected,
+      has_credentials: hasCredentials,
+      has_access_token: hasAccessToken,
+      requires_oauth: hasCredentials && !hasAccessToken,
+      channel_info: integration?.config_json?.channel_info || null
+    });
+  } catch (e) {
+    return error(e.message, 'CONNECTION_STATUS_ERROR', 500);
+  }
+}
+
 // ==================== ROUTE HANDLER ====================
 export async function GET(request, { params }) {
   const path = params?.path || [];
@@ -924,6 +982,8 @@ export async function GET(request, { params }) {
   if (path[0] === 'video-jobs' && path.length === 3 && path[2] === 'poll') {
     return handlePollVideoJob(path[1], userId);
   }
+  if (path[0] === 'settings') return handleGetSettings(userId);
+  if (path[0] === 'youtube' && path[1] === 'connection-status') return handleYoutubeConnectionStatus(userId);
   
   return error('Not found', 'NOT_FOUND', 404);
 }
@@ -962,6 +1022,7 @@ export async function POST(request, { params }) {
   
   if (path[0] === 'integrations' && path[1] === 'test') return handleTestIntegration(request, userId);
   if (path[0] === 'integrations' && path.length === 1) return handleSaveIntegration(request, userId);
+  if (path[0] === 'settings') return handleSaveSettings(request, userId);
   
   return error('Not found', 'NOT_FOUND', 404);
 }
