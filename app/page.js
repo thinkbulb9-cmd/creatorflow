@@ -73,6 +73,24 @@ export default function App() {
       fetchAnalytics(analyticsTimeframe);
       fetchYoutubeStatus();
       fetchUserSettings();
+      
+      // Check for YouTube OAuth callback
+      const params = new URLSearchParams(window.location.search);
+      const youtubeCallback = params.get('youtube_callback');
+      const channel = params.get('channel');
+      const message = params.get('message');
+      
+      if (youtubeCallback === 'success') {
+        toast.success(channel ? `YouTube connected successfully! Channel: ${channel}` : 'YouTube connected successfully!');
+        fetchYoutubeStatus(); // Refresh status
+        fetchIntegrations(); // Refresh integrations
+        // Clean up URL
+        window.history.replaceState({}, '', '/');
+      } else if (youtubeCallback === 'error') {
+        toast.error(`YouTube connection failed: ${message || 'Unknown error'}`);
+        // Clean up URL
+        window.history.replaceState({}, '', '/');
+      }
     }
   }, [session, analyticsTimeframe]);
 

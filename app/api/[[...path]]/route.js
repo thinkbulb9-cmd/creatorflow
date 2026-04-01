@@ -873,36 +873,86 @@ async function handleDashboardStats(userId) {
 
 // ==================== YOUTUBE OAUTH ====================
 async function handleYoutubeAuth(userId) {
-  const integration = await integrationService.getUserIntegration(userId, 'youtube');
-  const clientId = integration?.config_json?.client_id;
-  const clientSecret = integration?.config_json?.client_secret;
-  
-  if (!clientId || !clientSecret) {
-    return error('YouTube credentials not found. Please save your Client ID and Client Secret in the Integrations tab first.', 'NOT_CONFIGURED');
+  try {
+    // Get saved YouTube credentials
+    const integration = await integrationService.getUserIntegration(userId, 'youtube');
+    const clientId = integration?.config_json?.client_id;
+    const clientSecret = integration?.config_json?.client_secret;
+    
+    if (!clientId || !clientSecret) {
+      return error('YouTube credentials not found. Please save your Client ID and Client Secret in the Integrations tab first.', 'NOT_CONFIGURED');
+    }
+    
+    // Generate auth URL with state containing userId
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+    const redirectUri = `${baseUrl}/api/youtube/callback`;
+    
+    // Use userId as state to identify user in callback
+    const state = Buffer.from(JSON.stringify({ userId })).toString('base64');
+    const authUrl = youtubeService.getAuthUrl(clientId, redirectUri, state);
+    
+    console.log('[YouTube OAuth] Starting OAuth for user:', userId);
+    return json({ success: true, auth_url: authUrl });
+  } catch (e) {
+    console.error('[YouTube OAuth] Start error:', e);
+    return error(e.message, 'AUTH_ERROR', 500);
   }
-  
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-  const redirectUri = `${baseUrl}/api/youtube/callback`;
-  const authUrl = youtubeService.getAuthUrl(clientId, redirectUri);
-  return json({ success: true, auth_url: authUrl });
 }
 
-async function handleYoutubeCallback(request, userId) {
+async function handleYoutubeCallback(request) {
   try {
     const { searchParams } = new URL(request.url);
     const code = searchParams.get('code');
-    if (!code) return error('Missing code', 'MISSING_CODE');
+    const state = searchParams.get('state');
+    const error_param = searchParams.get('error');
     
-    // Get YouTube integration to get client credentials
-    const integration = await integrationService.getUserIntegration(userId, 'youtube');
-    if (!integration?.config_json?.client_id || !integration?.config_json?.client_secret) {
-      return error('YouTube not configured. Add Client ID and Secret first.', 'NOT_CONFIGURED');
+    console.log('[YouTube OAuth] Callback received');
+    
+    // Check for OAuth errors
+    if (error_param) {
+      console.error('[YouTube OAuth] User denied or error:', error_param);
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+      return NextResponse.redirect(`${baseUrl}/?youtube_callback=error&message=${encodeURIComponent(error_param)}`);
     }
+    
+    // Validate code and state
+    if (!code) {
+      console.error('[YouTube OAuth] Missing authorization code');
+      return error('Missing authorization code', 'MISSING_CODE');
+    }
+    
+    if (!state) {
+      console.error('[YouTube OAuth] Missing state parameter');
+      return error('Missing state parameter - invalid OAuth flow', 'MISSING_STATE');
+    }
+    
+    // Decode state to get userId
+    let userId;
+    try {
+      const stateData = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+      userId = stateData.userId;
+      console.log('[YouTube OAuth] Decoded userId from state:', userId);
+    } catch (e) {
+      console.error('[YouTube OAuth] Failed to decode state:', e);
+      return error('Invalid state parameter', 'INVALID_STATE');
+    }
+    
+    // Get YouTube integration to retrieve client credentials
+    const integration = await integrationService.getUserIntegration(userId, 'youtube');
+    
+    if (!integration?.config_json?.client_id || !integration?.config_json?.client_secret) {
+      console.error('[YouTube OAuth] Credentials not found for user:', userId);
+      console.error('[YouTube OAuth] Integration:', JSON.stringify(integration, null, 2));
+      return error('YouTube credentials not found. Please save your Client ID and Client Secret in the Integrations tab first.', 'NOT_CONFIGURED');
+    }
+    
+    console.log('[YouTube OAuth] Found credentials for user:', userId);
     
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
     const redirectUri = `${baseUrl}/api/youtube/callback`;
     
     // Exchange code for tokens
+    console.log('[YouTube OAuth] Exchanging code for tokens...');
     const tokens = await youtubeService.exchangeCodeForTokens(
       code,
       integration.config_json.client_id,
@@ -910,10 +960,15 @@ async function handleYoutubeCallback(request, userId) {
       redirectUri
     );
     
+    console.log('[YouTube OAuth] Tokens received successfully');
+    
     // Get channel info
+    console.log('[YouTube OAuth] Fetching channel info...');
     const channelInfo = await youtubeService.getChannelInfo(tokens.access_token);
     
-    // Save tokens and channel info
+    console.log('[YouTube OAuth] Channel info received:', channelInfo.title);
+    
+    // Save tokens and channel info to integration
     const db = await getDb();
     await db.collection('integrations').updateOne(
       { user_id: userId, provider: 'youtube' },
@@ -923,6 +978,8 @@ async function handleYoutubeCallback(request, userId) {
             ...integration.config_json,
             access_token: tokens.access_token,
             refresh_token: tokens.refresh_token,
+            token_type: tokens.token_type,
+            expires_in: tokens.expires_in,
             expires_at: Date.now() + (tokens.expires_in * 1000),
             channel_info: channelInfo
           },
@@ -932,7 +989,10 @@ async function handleYoutubeCallback(request, userId) {
       }
     );
     
-    return NextResponse.redirect(`${baseUrl}/?youtube_callback=success`);
+    console.log('[YouTube OAuth] Integration updated successfully');
+    
+    // Redirect back to app with success
+    return NextResponse.redirect(`${baseUrl}/?youtube_callback=success&channel=${encodeURIComponent(channelInfo.title)}`);
   } catch (e) { 
     console.error('[YouTube OAuth] Callback error:', e);
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
