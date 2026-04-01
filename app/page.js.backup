@@ -1,122 +1,1366 @@
 'use client';
-import { useState, useEffect, useCallback, Fragment } from 'react';
+
+import { useState, useEffect } from 'react';
 import { useSession, signIn, signOut } from 'next-auth/react';
-import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
-import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
-import {
-  LayoutDashboard, PlusCircle, FolderKanban, CalendarClock,
-  Plug, Settings, LogOut, Lightbulb, FileText, Film,
-  Video, Tag, Upload, Clock, Loader2, Eye, EyeOff,
-  Zap, Sparkles, Trash2, RefreshCw, Check, X,
-  ChevronLeft, Rocket, Globe, Send, Play, ChevronRight,
-  TrendingUp
-} from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Progress } from '@/components/ui/progress';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Sparkles, Video, Globe, Eye, EyeOff, Check, Loader2, Plus, Play, Trash2, Calendar, Clock, BarChart3, TrendingUp, Users, Share2, PlayCircle, CheckCircle2, AlertCircle, RefreshCw, Image as ImageIcon, Upload, Instagram, Facebook, Linkedin, Twitter, Award, Target, AlertTriangle, Lightbulb, ArrowRight, ArrowLeft, Settings, User, Music, Film, ExternalLink, CheckSquare, XCircle } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { toast } from 'sonner';
 
-async function api(path, options = {}) {
-  try {
-    const res = await fetch(`/api/${path}`, { headers: { 'Content-Type': 'application/json' }, ...options });
-    return await res.json();
-  } catch (err) { return { success: false, message: err.message }; }
-}
+export default function App() {
+  const { data: session, status } = useSession();
+  
+  // Main navigation state
+  const [activeView, setActiveView] = useState('dashboard'); // 'dashboard' | 'projects' | 'integrations' | 'create-project' | 'project-detail' | 'settings'
+  const [activeTab, setActiveTab] = useState('dashboard');
+  
+  // Data states
+  const [projects, setProjects] = useState([]);
+  const [integrations, setIntegrations] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
+  const [analyticsTimeframe, setAnalyticsTimeframe] = useState('7d');
+  const [languages, setLanguages] = useState([]);
+  const [voices, setVoices] = useState([]);
+  const [avatars, setAvatars] = useState([]);
+  const [youtubeStatus, setYoutubeStatus] = useState(null);
+  const [userSettings, setUserSettings] = useState(null);
+  
+  // Login form states
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  
+  // Project creation states
+  const [selectedProject, setSelectedProject] = useState(null);
+  const [projectForm, setProjectForm] = useState({
+    concept: '',
+    duration_seconds: 60,
+    aspect_ratio: '16:9',
+    language: 'English',
+    content_style: 'professional',
+    publishing_mode: 'draft', // draft, scheduled, instant
+    schedule_date: '',
+    schedule_time: '',
+    selected_voice_id: '',
+    selected_avatar_id: ''
+  });
+  const [validationWarnings, setValidationWarnings] = useState([]);
 
-const STATUS_ORDER = ['submitted','idea_evaluated','script_ready','scenes_ready','video_generating','video_ready','metadata_ready','youtube_uploaded','scheduled'];
-const STATUS_LABELS = { submitted:'Submitted', idea_evaluated:'Evaluated', script_ready:'Script Ready', scenes_ready:'Scenes Ready', video_generating:'Generating Video', video_ready:'Video Ready', metadata_ready:'Metadata Ready', youtube_uploaded:'Uploaded', scheduled:'Scheduled', failed:'Failed' };
-const STATUS_COLORS = { submitted:'bg-gray-500', idea_evaluated:'bg-blue-500', script_ready:'bg-blue-600', scenes_ready:'bg-indigo-500', video_generating:'bg-yellow-500', video_ready:'bg-purple-500', metadata_ready:'bg-violet-500', youtube_uploaded:'bg-green-500', scheduled:'bg-emerald-500', failed:'bg-red-500' };
-const PIPELINE_STEPS = [
-  { key:'evaluate', label:'Evaluate', completedAt:'idea_evaluated', icon: Lightbulb, action:'evaluate' },
-  { key:'script', label:'Script', completedAt:'script_ready', icon: FileText, action:'generate-script' },
-  { key:'scenes', label:'Scenes', completedAt:'scenes_ready', icon: Film, action:'generate-scenes' },
-  { key:'video', label:'Video', completedAt:'video_ready', icon: Video, action:'generate-video' },
-  { key:'metadata', label:'Metadata', completedAt:'metadata_ready', icon: Tag, action:'generate-metadata' },
-  { key:'upload', label:'Upload', completedAt:'youtube_uploaded', icon: Upload, action:'publish-youtube' },
-  { key:'schedule', label:'Schedule', completedAt:'scheduled', icon: Clock, action:'schedule-youtube' },
-];
+  // Integration states
+  const [keys, setKeys] = useState({});
+  const [showKeys, setShowKeys] = useState({});
+  const [saving, setSaving] = useState(null);
+  const [testing, setTesting] = useState(null);
 
-function getStepStatus(projectStatus, step) {
-  if (projectStatus === 'failed') return 'failed';
-  const ci = STATUS_ORDER.indexOf(projectStatus);
-  const si = STATUS_ORDER.indexOf(step.completedAt);
-  if (ci >= si) return 'completed';
-  if (ci === si - 1 || (step.completedAt === 'video_ready' && projectStatus === 'video_generating')) return 'current';
-  return 'pending';
-}
-
-// ======================== LOGIN ========================
-function LoginPage() {
-  const [isReg, setIsReg] = useState(false);
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  // Loading states
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState('');
+  const [pollingVideo, setPollingVideo] = useState(null);
+  
+  // NEW: Validation and pipeline states
+  const [validation, setValidation] = useState(null);
+  const [pipelineRunning, setPipelineRunning] = useState(false);
+  const [projectFilter, setProjectFilter] = useState('all'); // all, draft, running, published, scheduled, failed
 
+  // Fetch data on mount
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    if (p.get('error')) { toast.error('Social login not configured. Use email/password.'); window.history.replaceState({}, '', '/'); }
-  }, []);
-
-  const handleSubmit = async (e) => {
-    e.preventDefault(); setLoading(true); setErr('');
-    if (isReg) {
-      const res = await api('register', { method: 'POST', body: JSON.stringify({ name, email, password }) });
-      if (!res.success) { setErr(res.message); setLoading(false); return; }
+    if (session) {
+      fetchProjects();
+      fetchIntegrations();
+      fetchLanguages();
+      fetchAnalytics(analyticsTimeframe);
+      fetchYoutubeStatus();
+      fetchUserSettings();
+      
+      // Check for YouTube OAuth callback
+      const params = new URLSearchParams(window.location.search);
+      const youtubeCallback = params.get('youtube_callback');
+      const channel = params.get('channel');
+      const message = params.get('message');
+      
+      if (youtubeCallback === 'success') {
+        toast.success(channel ? `YouTube connected successfully! Channel: ${channel}` : 'YouTube connected successfully!');
+        fetchYoutubeStatus(); // Refresh status
+        fetchIntegrations(); // Refresh integrations
+        // Clean up URL
+        window.history.replaceState({}, '', '/');
+      } else if (youtubeCallback === 'error') {
+        toast.error(`YouTube connection failed: ${message || 'Unknown error'}`);
+        // Clean up URL
+        window.history.replaceState({}, '', '/');
+      }
     }
-    const result = await signIn('credentials', { email, password, redirect: false });
-    if (result?.error) setErr(isReg ? 'Registration succeeded but login failed. Try signing in.' : 'Invalid email or password.');
+  }, [session, analyticsTimeframe]);
+
+  // Poll video status
+  useEffect(() => {
+    if (pollingVideo) {
+      const interval = setInterval(() => {
+        pollVideoStatus(pollingVideo);
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [pollingVideo]);
+
+  // Auto-refresh selected project
+  useEffect(() => {
+    if (selectedProject) {
+      const interval = setInterval(() => {
+        refreshProject(selectedProject._id);
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [selectedProject]);
+
+  // Validate avatar/voice selection
+  useEffect(() => {
+    if (projectForm.selected_avatar_id && projectForm.selected_voice_id && avatars.length > 0 && voices.length > 0) {
+      const avatar = avatars.find(a => a.avatar_id === projectForm.selected_avatar_id);
+      const voice = voices.find(v => v.voice_id === projectForm.selected_voice_id);
+      
+      if (avatar && voice) {
+        const warnings = [];
+        if (avatar.gender && voice.gender && avatar.gender.toLowerCase() !== voice.gender.toLowerCase()) {
+          warnings.push({
+            type: 'gender_mismatch',
+            message: `Avatar gender (${avatar.gender}) doesn't match voice gender (${voice.gender}). This may affect video quality.`
+          });
+        }
+        setValidationWarnings(warnings);
+      }
+    } else {
+      setValidationWarnings([]);
+    }
+  }, [projectForm.selected_avatar_id, projectForm.selected_voice_id, avatars, voices]);
+
+  const api = async (endpoint, options = {}) => {
+    const res = await fetch(`/api/${endpoint}`, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', ...options.headers }
+    });
+    const data = await res.json();
+    if (!data.success && data.message) toast.error(data.message);
+    return data;
+  };
+
+  const fetchProjects = async () => {
+    const data = await api('projects');
+    if (data.success) setProjects(data.projects || []);
+  };
+
+  const fetchIntegrations = async () => {
+    const data = await api('integrations');
+    if (data.success) {
+      setIntegrations(data.integrations || []);
+      const heygen = data.integrations?.find(i => i.provider === 'heygen' && i.is_connected);
+      if (heygen) {
+        fetchVoices();
+        fetchAvatars();
+      }
+    }
+  };
+
+  const fetchLanguages = async () => {
+    const data = await api('languages');
+    if (data.success) setLanguages(data.languages || []);
+  };
+
+  const fetchVoices = async () => {
+    const data = await api('heygen/voices');
+    if (data.success) setVoices(data.voices || []);
+  };
+
+  const fetchAvatars = async () => {
+    const data = await api('heygen/avatars');
+    if (data.success) setAvatars(data.avatars || []);
+  };
+
+  const fetchAnalytics = async (timeframe) => {
+    const data = await api(`analytics?timeframe=${timeframe}`);
+    if (data.success) setAnalytics(data.analytics);
+  };
+
+  const fetchYoutubeStatus = async () => {
+    const data = await api('youtube/connection-status');
+    if (data.success) setYoutubeStatus(data);
+  };
+
+  const fetchUserSettings = async () => {
+    const data = await api('settings');
+    if (data.success) setUserSettings(data.settings);
+  };
+
+  const refreshProject = async (id) => {
+    const data = await api(`projects/${id}`);
+    if (data.success) {
+      setSelectedProject(data.project);
+      setProjects(prev => prev.map(p => p._id === id ? data.project : p));
+    }
+  };
+
+  const pollVideoStatus = async (jobId) => {
+    const data = await api(`video-jobs/${jobId}/poll`);
+    if (data.success && data.status === 'completed') {
+      setPollingVideo(null);
+      if (selectedProject) refreshProject(selectedProject._id);
+      toast.success('Video generation completed!');
+    }
+  };
+
+  const createProject = async () => {
+    // Validate scheduled mode requirements
+    if (projectForm.publishing_mode === 'scheduled') {
+      if (!projectForm.schedule_date || !projectForm.schedule_time) {
+        toast.error('Please select date and time for scheduled publishing');
+        return;
+      }
+      
+      const scheduleDateTime = new Date(`${projectForm.schedule_date}T${projectForm.schedule_time}`);
+      if (scheduleDateTime <= new Date()) {
+        toast.error('Schedule time must be in the future');
+        return;
+      }
+    }
+    
+    setLoading(true);
+    const data = await api('projects', { method: 'POST', body: JSON.stringify(projectForm) });
+    if (data.success) {
+      toast.success('Project created successfully!');
+      setActiveView('projects');
+      setProjectForm({
+        concept: '',
+        duration_seconds: 60,
+        aspect_ratio: '16:9',
+        language: 'English',
+        content_style: 'professional',
+        publishing_mode: 'draft',
+        schedule_date: '',
+        schedule_time: '',
+        selected_voice_id: '',
+        selected_avatar_id: ''
+      });
+      setValidationWarnings([]);
+      fetchProjects();
+    }
     setLoading(false);
   };
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 mb-2">
-            <div className="p-2 rounded-xl bg-gradient-to-br from-violet-600 to-indigo-600"><Sparkles className="h-6 w-6 text-white" /></div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-violet-400 to-indigo-400 bg-clip-text text-transparent">CreatorFlow AI</h1>
-          </div>
-          <p className="text-muted-foreground">Automate your YouTube content pipeline</p>
-        </div>
-        <Card className="border-border/50 shadow-2xl">
-          <CardHeader className="pb-4">
-            <CardTitle>{isReg ? 'Create Account' : 'Welcome Back'}</CardTitle>
-            <CardDescription>{isReg ? 'Start creating amazing content' : 'Sign in to your account'}</CardDescription>
+  const runPipelineStep = async (projectId, step, regenerate = false) => {
+    setLoading(true);
+    const data = await api(`projects/${projectId}/${step}`, {
+      method: 'POST',
+      body: JSON.stringify({ regenerate })
+    });
+    
+    if (data.success) {
+      if (data.cached) {
+        toast.info(data.message || 'Loaded from cache');
+      } else {
+        toast.success(`${step.replace(/-/g, ' ')} completed!`);
+      }
+      
+      if (step === 'generate-video' && data.job_id) {
+        setPollingVideo(data.job_id);
+      }
+      
+      refreshProject(projectId);
+    }
+    setLoading(false);
+  };
+
+  const selectThumbnail = async (projectId, thumbnailUrl) => {
+    const data = await api(`projects/${projectId}/select-thumbnail`, {
+      method: 'POST',
+      body: JSON.stringify({ selected_thumbnail_url: thumbnailUrl })
+    });
+    if (data.success) {
+      toast.success(data.message || 'Thumbnail selected! Pipeline advanced to Metadata step.');
+      // Refresh project to get updated pipeline state
+      await refreshProject(projectId);
+      
+      // Log progress update
+      if (data.progress) {
+        console.log('[Pipeline] Progress updated:', data.progress);
+      }
+      if (data.current_step) {
+        console.log('[Pipeline] Current active step:', data.current_step.name);
+      }
+    }
+  };
+  
+  // NEW: Validation function
+  const fetchValidation = async (projectId) => {
+    const data = await api(`projects/${projectId}/validate`);
+    if (data.success) {
+      setValidation(data);
+      return data;
+    }
+    return null;
+  };
+  
+  // NEW: Run full pipeline
+  const runFullPipeline = async (projectId) => {
+    setPipelineRunning(true);
+    setLoading(true);
+    
+    const data = await api(`projects/${projectId}/run-pipeline`, { method: 'POST' });
+    
+    if (data.success) {
+      toast.success('Pipeline started! This may take several minutes...');
+      
+      // Poll for status updates
+      const pollInterval = setInterval(async () => {
+        const updated = await api(`projects/${projectId}`);
+        if (updated.success) {
+          setSelectedProject(updated.project);
+          
+          if (updated.project.pipeline_status === 'completed') {
+            clearInterval(pollInterval);
+            setPipelineRunning(false);
+            setLoading(false);
+            toast.success('Pipeline completed successfully!');
+            fetchProjects();
+          } else if (updated.project.pipeline_status === 'failed') {
+            clearInterval(pollInterval);
+            setPipelineRunning(false);
+            setLoading(false);
+            toast.error(`Pipeline failed: ${updated.project.pipeline_error || 'Unknown error'}`);
+            fetchProjects();
+          }
+        }
+      }, 3000);
+      
+      // Timeout after 10 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setPipelineRunning(false);
+        setLoading(false);
+      }, 600000);
+    } else {
+      setPipelineRunning(false);
+      setLoading(false);
+      
+      if (data.validations) {
+        setValidation(data);
+        toast.error(data.message || 'Validation failed. Please fix the issues.');
+      }
+    }
+  };
+
+  // NEW: Update project concept
+  const updateProjectConcept = async (projectId, newConcept) => {
+    setLoading(true);
+    const data = await api(`projects/${projectId}/update-concept`, {
+      method: 'PATCH',
+      body: JSON.stringify({ concept: newConcept })
+    });
+    
+    if (data.success) {
+      toast.success('Concept updated! Re-evaluate to get new insights.');
+      setSelectedProject(data.project);
+      fetchProjects();
+      setLoading(false);
+      return { success: true, project: data.project };
+    } else {
+      toast.error(data.error || 'Failed to update concept');
+      setLoading(false);
+      return { success: false };
+    }
+  };
+  
+  // NEW: Apply suggested topic
+  const applySuggestedTopic = async (projectId, suggestedTopic) => {
+    if (confirm(`Replace current concept with: "${suggestedTopic}"?`)) {
+      return await updateProjectConcept(projectId, suggestedTopic);
+    }
+    return { success: false };
+  };
+
+
+  const deleteProject = async (id) => {
+    if (!confirm('Delete this project? This action cannot be undone.')) return;
+    const data = await api(`projects/${id}`, { method: 'DELETE' });
+    if (data.success) {
+      toast.success('Project deleted');
+      fetchProjects();
+      if (selectedProject?._id === id) {
+        setSelectedProject(null);
+        setActiveView('projects');
+      }
+    }
+  };
+
+  const handleSaveIntegration = async (provider, config) => {
+    setSaving(provider);
+    const data = await api('integrations', {
+      method: 'POST',
+      body: JSON.stringify({ provider, config_json: config })
+    });
+    if (data.success) {
+      toast.success(data.message || 'Integration saved!');
+      fetchIntegrations();
+      if (provider === 'youtube') fetchYoutubeStatus();
+    }
+    setSaving(null);
+  };
+
+  const handleTestIntegration = async (provider) => {
+    setTesting(provider);
+    const data = await api('integrations/test', {
+      method: 'POST',
+      body: JSON.stringify({ provider })
+    });
+    if (data.success) {
+      toast[data.connected ? 'success' : 'error'](data.message);
+    }
+    setTesting(null);
+  };
+
+  const handleYoutubeAuth = async () => {
+    const data = await api('youtube/auth');
+    if (data.success && data.auth_url) {
+      window.location.href = data.auth_url;
+    }
+  };
+
+  const saveUserSettings = async (newSettings) => {
+    const data = await api('settings', {
+      method: 'POST',
+      body: JSON.stringify({ settings: newSettings })
+    });
+    if (data.success) {
+      toast.success('Settings saved!');
+      setUserSettings(newSettings);
+    }
+  };
+
+  // Calculate progress with strict dependencies
+  const calculateProgress = (project) => {
+    if (!project?.pipeline_state) return { completed: 0, total: 8, percentage: 0 };
+    
+    const stepOrder = ['evaluate', 'script', 'scenes', 'video', 'thumbnail', 'metadata', 'upload', 'schedule'];
+    let completed = 0;
+    
+    for (const step of stepOrder) {
+      if (project.pipeline_state[step]?.status === 'completed') {
+        completed++;
+      } else {
+        break; // Strict sequential progression
+      }
+    }
+    
+    const percentage = Math.round((completed / stepOrder.length) * 100);
+    return { completed, total: stepOrder.length, percentage };
+  };
+
+  // Get current step info
+  const getCurrentStep = (project) => {
+    if (!project?.pipeline_state) return { name: 'Not Started', status: 'pending', key: null };
+    
+    const stepOrder = ['evaluate', 'script', 'scenes', 'video', 'thumbnail', 'metadata', 'upload', 'schedule'];
+    const stepNames = {
+      'evaluate': 'Idea Evaluation',
+      'script': 'Script Generation',
+      'scenes': 'Scene Creation',
+      'video': 'Video Generation',
+      'thumbnail': 'Thumbnail Creation',
+      'metadata': 'Metadata Generation',
+      'upload': 'YouTube Upload',
+      'schedule': 'Schedule Publishing'
+    };
+    
+    for (const stepKey of stepOrder) {
+      const step = project.pipeline_state[stepKey];
+      if (!step || step.status !== 'completed') {
+        return {
+          key: stepKey,
+          name: stepNames[stepKey],
+          status: step?.status || 'pending'
+        };
+      }
+    }
+    return { name: 'Completed', status: 'completed', key: null };
+  };
+
+  const getScoreColor = (score) => {
+    if (score >= 9) return 'text-yellow-500';
+    if (score >= 7) return 'text-green-500';
+    if (score >= 5) return 'text-orange-500';
+    return 'text-red-500';
+  };
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginLoading(true);
+    setLoginError('');
+    
+    const result = await signIn('credentials', {
+      email: loginEmail,
+      password: loginPassword,
+      redirect: false
+    });
+    
+    if (result?.error) {
+      setLoginError('Invalid email or password');
+      setLoginLoading(false);
+    } else {
+      window.location.href = '/';
+    }
+  };
+
+  // Auth check
+  if (status === 'loading') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+        <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 p-4">
+        <Card className="w-full max-w-md border-slate-800 bg-slate-900/50 backdrop-blur">
+          <CardHeader className="space-y-1">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center">
+                <Sparkles className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <CardTitle className="text-2xl text-white">CreatorFlow AI</CardTitle>
+                <CardDescription>Automate your YouTube content pipeline</CardDescription>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {isReg && <div className="space-y-2"><Label htmlFor="name">Name</Label><Input id="name" value={name} onChange={e => setName(e.target.value)} placeholder="Your name" required /></div>}
-              <div className="space-y-2"><Label htmlFor="email">Email</Label><Input id="email" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" required /></div>
-              <div className="space-y-2"><Label htmlFor="password">Password</Label><Input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 6 characters" required /></div>
-              {err && <p className="text-sm text-red-400 bg-red-400/10 p-2 rounded">{err}</p>}
-              <Button type="submit" className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700" disabled={loading}>
-                {loading && <Loader2 className="h-4 w-4 animate-spin mr-2" />}{isReg ? 'Create Account' : 'Sign In'}
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <Label className="text-white">Email</Label>
+                <Input
+                  type="email"
+                  placeholder="your@email.com"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  required
+                  className="bg-slate-800 border-slate-700 text-white"
+                />
+              </div>
+              <div>
+                <Label className="text-white">Password</Label>
+                <Input
+                  type="password"
+                  placeholder="••••••••"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  required
+                  className="bg-slate-800 border-slate-700 text-white"
+                />
+              </div>
+              {loginError && (
+                <div className="text-sm text-red-400 bg-red-950/20 border border-red-900 rounded p-2">
+                  {loginError}
+                </div>
+              )}
+              <Button 
+                type="submit" 
+                disabled={loginLoading}
+                className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700"
+              >
+                {loginLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                Sign In
               </Button>
+              <div className="text-center text-sm text-slate-400">
+                Test credentials: testuser@creatorflow.ai / TestPassword123!
+              </div>
             </form>
-            <div className="relative my-6"><Separator /><span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-3 text-xs text-muted-foreground">Or continue with</span></div>
-            <div className="grid grid-cols-2 gap-3">
-              <Button variant="outline" onClick={() => signIn('google')} className="h-10">
-                <svg className="h-4 w-4 mr-2" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
-                Google
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // Main App Layout
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950">
+      {/* Global Progress Bar for Selected Project */}
+      {selectedProject && activeView === 'project-detail' && (
+        <GlobalProgressBar project={selectedProject} />
+      )}
+
+      {/* Header */}
+      <div className="border-b border-slate-800 bg-slate-900/50 backdrop-blur sticky top-0 z-40">
+        <div className="container mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3 cursor-pointer" onClick={() => setActiveView('dashboard')}>
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center">
+                <Sparkles className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <h1 className="text-xl font-bold text-white">CreatorFlow AI</h1>
+                <p className="text-xs text-slate-400">Automate YouTube content</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <Button 
+                onClick={() => setActiveView('settings')} 
+                variant="ghost" 
+                size="sm" 
+                className="hidden sm:flex items-center gap-2 text-slate-400 hover:text-white"
+              >
+                <User className="h-4 w-4" />
+                <span className="text-sm">{session.user.email}</span>
               </Button>
-              <Button variant="outline" onClick={() => signIn('github')} className="h-10">
-                <svg className="h-4 w-4 mr-2" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
-                GitHub
+              <Button onClick={() => signOut()} variant="outline" size="sm" className="border-slate-700">
+                Sign Out
               </Button>
             </div>
-            <p className="text-center text-sm text-muted-foreground mt-4">
-              {isReg ? 'Already have an account?' : "Don't have an account?"}
-              <button onClick={() => { setIsReg(!isReg); setErr(''); }} className="ml-1 text-violet-400 hover:underline font-medium">{isReg ? 'Sign in' : 'Create one'}</button>
+          </div>
+          
+          {/* Desktop Navigation */}
+          <div className="flex items-center gap-2 mt-4">
+            <Button
+              onClick={() => setActiveView('dashboard')}
+              variant={activeView === 'dashboard' ? 'default' : 'ghost'}
+              size="sm"
+              className={activeView === 'dashboard' ? 'bg-violet-600 hover:bg-violet-700' : 'text-slate-400 hover:text-white'}
+            >
+              <BarChart3 className="h-4 w-4 mr-2" />
+              Dashboard
+            </Button>
+            <Button
+              onClick={() => setActiveView('projects')}
+              variant={(activeView === 'projects' || activeView === 'create-project' || activeView === 'project-detail') ? 'default' : 'ghost'}
+              size="sm"
+              className={(activeView === 'projects' || activeView === 'create-project' || activeView === 'project-detail') ? 'bg-violet-600 hover:bg-violet-700' : 'text-slate-400 hover:text-white'}
+            >
+              <Video className="h-4 w-4 mr-2" />
+              Projects
+            </Button>
+            <Button
+              onClick={() => setActiveView('integrations')}
+              variant={activeView === 'integrations' ? 'default' : 'ghost'}
+              size="sm"
+              className={activeView === 'integrations' ? 'bg-violet-600 hover:bg-violet-700' : 'text-slate-400 hover:text-white'}
+            >
+              <Globe className="h-4 w-4 mr-2" />
+              Integrations
+            </Button>
+            <Button
+              onClick={() => setActiveView('settings')}
+              variant={activeView === 'settings' ? 'default' : 'ghost'}
+              size="sm"
+              className={activeView === 'settings' ? 'bg-violet-600 hover:bg-violet-700' : 'text-slate-400 hover:text-white'}
+            >
+              <Settings className="h-4 w-4 mr-2" />
+              Settings
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content Router */}
+      <div className="container mx-auto px-4 py-6">
+        {activeView === 'dashboard' && (
+          <DashboardView 
+            analytics={analytics}
+            analyticsTimeframe={analyticsTimeframe}
+            setAnalyticsTimeframe={setAnalyticsTimeframe}
+            projects={projects}
+            onNavigate={setActiveView}
+          />
+        )}
+
+        {activeView === 'projects' && (
+          <ProjectsView 
+            projects={projects}
+            onCreateNew={() => setActiveView('create-project')}
+            onSelectProject={(proj) => {
+              setSelectedProject(proj);
+              setActiveView('project-detail');
+            }}
+            calculateProgress={calculateProgress}
+            getCurrentStep={getCurrentStep}
+          />
+        )}
+
+        {activeView === 'integrations' && (
+          <IntegrationsView 
+            integrations={integrations}
+            youtubeStatus={youtubeStatus}
+            keys={keys}
+            setKeys={setKeys}
+            showKeys={showKeys}
+            setShowKeys={setShowKeys}
+            saving={saving}
+            testing={testing}
+            avatars={avatars}
+            onSaveIntegration={handleSaveIntegration}
+            onTestIntegration={handleTestIntegration}
+            onYoutubeAuth={handleYoutubeAuth}
+          />
+        )}
+
+        {activeView === 'create-project' && (
+          <CreateProjectView 
+            projectForm={projectForm}
+            setProjectForm={setProjectForm}
+            languages={languages}
+            voices={voices}
+            avatars={avatars}
+            validationWarnings={validationWarnings}
+            loading={loading}
+            onCancel={() => setActiveView('projects')}
+            onCreate={createProject}
+          />
+        )}
+
+        {activeView === 'project-detail' && selectedProject && (
+          <ProjectDetailView 
+            project={selectedProject}
+            onBack={() => {
+              setSelectedProject(null);
+              setActiveView('projects');
+            }}
+            onDelete={deleteProject}
+            onRunStep={runPipelineStep}
+            onSelectThumbnail={selectThumbnail}
+            onUpdateConcept={updateProjectConcept}
+            onApplySuggestedTopic={applySuggestedTopic}
+            onRunFullPipeline={runFullPipeline}
+            loading={loading}
+            pollingVideo={pollingVideo}
+            youtubeStatus={youtubeStatus}
+            pipelineRunning={pipelineRunning}
+            calculateProgress={calculateProgress}
+            getCurrentStep={getCurrentStep}
+          />
+        )}
+
+        {activeView === 'settings' && (
+          <SettingsView 
+            user={session.user}
+            settings={userSettings}
+            onBack={() => setActiveView('dashboard')}
+            onSave={saveUserSettings}
+          />
+        )}
+      </div>
+
+    </div>
+  );
+}
+
+// ==================== GLOBAL PROGRESS BAR ====================
+function GlobalProgressBar({ project }) {
+  const stepOrder = ['evaluate', 'script', 'scenes', 'video', 'thumbnail', 'metadata', 'upload', 'schedule'];
+  const stepNames = ['Evaluate', 'Script', 'Scenes', 'Video', 'Thumbnail', 'Metadata', 'Upload', 'Schedule'];
+  
+  let completedSteps = 0;
+  for (const step of stepOrder) {
+    if (project.pipeline_state?.[step]?.status === 'completed') {
+      completedSteps++;
+    } else {
+      break;
+    }
+  }
+  
+  const percentage = Math.round((completedSteps / stepOrder.length) * 100);
+  
+  return (
+    <div className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
+      <div className="container mx-auto px-4 py-3">
+        <div className="flex items-center gap-4">
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-medium text-slate-300">Pipeline Progress</span>
+              <span className="text-xs font-bold text-violet-400">{percentage}%</span>
+            </div>
+            <Progress value={percentage} className="h-2" />
+          </div>
+          <div className="hidden md:flex items-center gap-2">
+            {stepOrder.map((step, idx) => {
+              const status = project.pipeline_state?.[step]?.status || 'pending';
+              return (
+                <div key={step} className="flex items-center gap-1">
+                  <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
+                    status === 'completed' ? 'bg-green-600 text-white' :
+                    status === 'running' ? 'bg-blue-600 text-white animate-pulse' :
+                    status === 'failed' ? 'bg-red-600 text-white' :
+                    'bg-slate-700 text-slate-400'
+                  }`}>
+                    {status === 'completed' ? <Check className="h-3 w-3" /> : idx + 1}
+                  </div>
+                  {idx < stepOrder.length - 1 && (
+                    <div className={`w-4 h-0.5 ${status === 'completed' ? 'bg-green-600' : 'bg-slate-700'}`} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==================== DASHBOARD VIEW ====================
+function DashboardView({ analytics, analyticsTimeframe, setAnalyticsTimeframe, projects, onNavigate }) {
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Analytics Dashboard</h2>
+          <p className="text-slate-400 text-sm">Track your content performance</p>
+        </div>
+        <div className="flex gap-2">
+          <Select value={analyticsTimeframe} onValueChange={setAnalyticsTimeframe}>
+            <SelectTrigger className="w-40 bg-slate-800 border-slate-700">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="7d">Last 7 Days</SelectItem>
+              <SelectItem value="30d">Last 30 Days</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={() => onNavigate('projects')} className="bg-gradient-to-r from-violet-600 to-indigo-600">
+            <Plus className="h-4 w-4 mr-2" />
+            New Project
+          </Button>
+        </div>
+      </div>
+
+      {analytics && (
+        <>
+          {/* KPI Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardHeader className="pb-2">
+                <CardDescription className="text-xs">Views</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Eye className="h-4 w-4 text-violet-500" />
+                  <span className="text-2xl font-bold text-white">{analytics.views?.toLocaleString()}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardHeader className="pb-2">
+                <CardDescription className="text-xs">Clicks</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-green-500" />
+                  <span className="text-2xl font-bold text-white">{analytics.clicks?.toLocaleString()}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardHeader className="pb-2">
+                <CardDescription className="text-xs">Shares</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Share2 className="h-4 w-4 text-blue-500" />
+                  <span className="text-2xl font-bold text-white">{analytics.shares?.toLocaleString()}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardHeader className="pb-2">
+                <CardDescription className="text-xs">Watch Time</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <PlayCircle className="h-4 w-4 text-orange-500" />
+                  <span className="text-2xl font-bold text-white">{Math.floor(analytics.watch_time / 3600)}h</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardHeader className="pb-2">
+                <CardDescription className="text-xs">Published</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  <span className="text-2xl font-bold text-white">{analytics.published_videos}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-slate-800/50 border-slate-700">
+              <CardHeader className="pb-2">
+                <CardDescription className="text-xs">Scheduled</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-yellow-500" />
+                  <span className="text-2xl font-bold text-white">{analytics.scheduled_videos}</span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Chart */}
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2">
+                Performance Trend
+                {analytics.is_mock && (
+                  <Badge variant="secondary" className="text-xs">Sample Data</Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={analytics.chart_data}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                  <XAxis dataKey="date" stroke="#94a3b8" />
+                  <YAxis stroke="#94a3b8" />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
+                    labelStyle={{ color: '#e2e8f0' }}
+                  />
+                  <Line type="monotone" dataKey="views" stroke="#8b5cf6" strokeWidth={2} />
+                  <Line type="monotone" dataKey="clicks" stroke="#10b981" strokeWidth={2} />
+                </LineChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+
+          {/* Recent Projects Quick View */}
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardHeader>
+              <CardTitle className="text-white">Recent Projects</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                {projects.slice(0, 5).map(proj => (
+                  <div key={proj._id} className="flex items-center justify-between p-2 rounded hover:bg-slate-700/50 cursor-pointer" onClick={() => onNavigate('project-detail')}>
+                    <div className="flex-1">
+                      <div className="text-sm text-white font-medium line-clamp-1">{proj.concept}</div>
+                      <div className="text-xs text-slate-400">{new Date(proj.created_at).toLocaleDateString()}</div>
+                    </div>
+                    <Badge variant="secondary">{proj.status}</Badge>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ==================== PROJECTS VIEW ====================
+function ProjectsView({ projects, onCreateNew, onSelectProject, calculateProgress, getCurrentStep }) {
+  const [filter, setFilter] = useState('all');
+  
+  const filteredProjects = projects.filter(p => {
+    if (filter === 'all') return true;
+    if (filter === 'draft') return p.status === 'draft' || !p.status;
+    if (filter === 'running') return p.pipeline_status === 'running';
+    if (filter === 'published') return p.status === 'published';
+    if (filter === 'scheduled') return p.status === 'scheduled';
+    if (filter === 'failed') return p.pipeline_status === 'failed' || p.status === 'failed';
+    return true;
+  });
+  
+  const counts = {
+    all: projects.length,
+    draft: projects.filter(p => p.status === 'draft' || !p.status).length,
+    running: projects.filter(p => p.pipeline_status === 'running').length,
+    published: projects.filter(p => p.status === 'published').length,
+    scheduled: projects.filter(p => p.status === 'scheduled').length,
+    failed: projects.filter(p => p.pipeline_status === 'failed' || p.status === 'failed').length
+  };
+  
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Projects</h2>
+          <p className="text-slate-400 text-sm">Manage your content projects</p>
+        </div>
+        <Button
+          onClick={onCreateNew}
+          className="bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700"
+        >
+          <Plus className="h-4 w-4 mr-2" />
+          New Project
+        </Button>
+      </div>
+      
+      {/* FILTERS */}
+      <div className="flex gap-2 overflow-x-auto pb-2">
+        {[
+          { key: 'all', label: 'All Projects', icon: Video },
+          { key: 'draft', label: 'Draft', icon: Target },
+          { key: 'running', label: 'Running', icon: Loader2 },
+          { key: 'published', label: 'Published', icon: CheckCircle2 },
+          { key: 'scheduled', label: 'Scheduled', icon: Calendar },
+          { key: 'failed', label: 'Failed', icon: AlertCircle }
+        ].map(({ key, label, icon: Icon }) => (
+          <Button
+            key={key}
+            onClick={() => setFilter(key)}
+            variant={filter === key ? 'default' : 'outline'}
+            size="sm"
+            className={filter === key ? 'bg-violet-600 hover:bg-violet-700' : 'border-slate-700'}
+          >
+            <Icon className={`h-4 w-4 mr-2 ${key === 'running' && filter === key ? 'animate-spin' : ''}`} />
+            {label}
+            <Badge variant="secondary" className="ml-2">{counts[key]}</Badge>
+          </Button>
+        ))}
+      </div>
+
+      {/* Projects Grid */}
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filteredProjects.map(project => {
+          const progress = calculateProgress(project);
+          const currentStep = getCurrentStep(project);
+          const statusColor = 
+            project.pipeline_status === 'running' ? 'bg-blue-600' :
+            project.status === 'published' ? 'bg-green-600' :
+            project.status === 'scheduled' ? 'bg-yellow-600' :
+            project.pipeline_status === 'failed' ? 'bg-red-600' : 'bg-slate-600';
+
+          return (
+            <Card
+              key={project._id}
+              className="bg-slate-800/50 border-slate-700 hover:border-violet-500 transition-all cursor-pointer group"
+              onClick={() => onSelectProject(project)}
+            >
+              <CardHeader>
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <CardTitle className="text-white text-lg line-clamp-2 group-hover:text-violet-400 transition-colors">
+                      {project.concept}
+                    </CardTitle>
+                    <CardDescription className="mt-1">
+                      {project.aspect_ratio} • {project.duration_seconds}s • {project.language}
+                    </CardDescription>
+                    <div className="flex items-center gap-2 mt-2">
+                      <div className="flex items-center gap-1 text-xs text-slate-500">
+                        <Clock className="h-3 w-3" />
+                        {new Date(project.created_at).toLocaleDateString()}
+                      </div>
+                      {project.publishing_mode && (
+                        <Badge variant="outline" className="text-xs border-slate-600">
+                          {project.publishing_mode}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <div className={`h-2 w-2 rounded-full ${statusColor} ${project.pipeline_status === 'running' ? 'animate-pulse' : ''}`} />
+                    <Badge variant={currentStep.status === 'completed' ? 'default' : currentStep.status === 'failed' ? 'destructive' : 'secondary'} className="ml-2 text-xs">
+                      {project.pipeline_status === 'running' ? 'Running' : 
+                       project.status === 'published' ? 'Published' :
+                       project.status === 'scheduled' ? 'Scheduled' :
+                       project.pipeline_status === 'failed' ? 'Failed' : 'Draft'}
+                    </Badge>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div>
+                  <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
+                    <span>{progress.completed} of {progress.total} steps</span>
+                    <span className="font-bold text-violet-400">{progress.percentage}%</span>
+                  </div>
+                  <Progress value={progress.percentage} className="h-2" />
+                </div>
+                <div className="text-xs text-slate-400">
+                  {project.pipeline_status === 'running' ? 'Running...' : `Current: ${currentStep.name}`}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {filteredProjects.length === 0 && (
+        <Card className="bg-slate-800/50 border-slate-700">
+          <CardContent className="py-12 text-center">
+            <Video className="h-12 w-12 mx-auto mb-4 text-slate-600" />
+            <p className="text-slate-400 mb-4">
+              {filter === 'all' ? 'No projects yet. Create your first project!' : `No ${filter} projects found.`}
             </p>
+            {filter === 'all' && (
+              <Button onClick={onCreateNew} className="bg-gradient-to-r from-violet-600 to-indigo-600">
+                <Plus className="h-4 w-4 mr-2" />
+                Create First Project
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ==================== INTEGRATIONS VIEW ====================
+function IntegrationsView({ integrations, youtubeStatus, keys, setKeys, showKeys, setShowKeys, saving, testing, avatars, onSaveIntegration, onTestIntegration, onYoutubeAuth }) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold text-white">Integrations</h2>
+        <p className="text-slate-400 text-sm">Connect your services to enable AI-powered content generation</p>
+      </div>
+
+      {/* Setup Checklist */}
+      <SetupChecklist integrations={integrations} youtubeStatus={youtubeStatus} />
+
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {/* OpenAI */}
+        <Card className="bg-slate-800/50 border-slate-700">
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center">
+                <Sparkles className="h-5 w-5 text-white" />
+              </div>
+              <div className="flex-1">
+                <CardTitle className="text-white">OpenAI</CardTitle>
+                <CardDescription className="text-xs">AI idea evaluation, script, scenes, and metadata</CardDescription>
+              </div>
+              <Badge variant={integrations.find(i => i.provider === 'openai')?.is_connected ? 'default' : 'secondary'}>
+                {integrations.find(i => i.provider === 'openai')?.is_connected ? 'Connected' : 'Not Connected'}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div>
+              <Label className="text-xs text-slate-400">API Key</Label>
+              <div className="relative">
+                <Input
+                  type={showKeys.openai ? 'text' : 'password'}
+                  placeholder="sk-..."
+                  value={keys.openai || ''}
+                  onChange={e => setKeys(p => ({ ...p, openai: e.target.value }))}
+                  className="pr-10 bg-slate-900 border-slate-700"
+                />
+                <button
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-300"
+                  onClick={() => setShowKeys(p => ({ ...p, openai: !p.openai }))}
+                >
+                  {showKeys.openai ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => onSaveIntegration('openai', { api_key: keys.openai })}
+                disabled={!keys.openai || saving === 'openai'}
+                className="flex-1 bg-violet-600 hover:bg-violet-700"
+              >
+                {saving === 'openai' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
+                Save
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onTestIntegration('openai')}
+                disabled={testing === 'openai'}
+                className="border-slate-700"
+              >
+                {testing === 'openai' ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Test'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* HeyGen */}
+        <Card className="bg-slate-800/50 border-slate-700">
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
+                <Video className="h-5 w-5 text-white" />
+              </div>
+              <div className="flex-1">
+                <CardTitle className="text-white">HeyGen</CardTitle>
+                <CardDescription className="text-xs">AI avatar video generation from scripts</CardDescription>
+              </div>
+              <Badge variant={integrations.find(i => i.provider === 'heygen')?.is_connected ? 'default' : 'secondary'}>
+                {integrations.find(i => i.provider === 'heygen')?.is_connected ? 'Connected' : 'Not Connected'}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div>
+              <Label className="text-xs text-slate-400">API Key</Label>
+              <div className="relative">
+                <Input
+                  type={showKeys.heygen ? 'text' : 'password'}
+                  placeholder="Your HeyGen API key"
+                  value={keys.heygen || ''}
+                  onChange={e => setKeys(p => ({ ...p, heygen: e.target.value }))}
+                  className="pr-10 bg-slate-900 border-slate-700"
+                />
+                <button
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-300"
+                  onClick={() => setShowKeys(p => ({ ...p, heygen: !p.heygen }))}
+                >
+                  {showKeys.heygen ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            {avatars.length > 0 && (
+              <div>
+                <Label className="text-xs text-slate-400">Selected Avatar</Label>
+                <div className="text-sm text-slate-300">
+                  {avatars.find(a => a.avatar_id === integrations.find(i => i.provider === 'heygen')?.config_json?.avatar_id)?.avatar_name || 'Auto-detected'}
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => onSaveIntegration('heygen', { api_key: keys.heygen })}
+                disabled={!keys.heygen || saving === 'heygen'}
+                className="flex-1 bg-violet-600 hover:bg-violet-700"
+              >
+                {saving === 'heygen' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
+                Save
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onTestIntegration('heygen')}
+                disabled={testing === 'heygen'}
+                className="border-slate-700"
+              >
+                {testing === 'heygen' ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Test'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* YouTube */}
+        <Card className="bg-slate-800/50 border-slate-700">
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-red-500 to-rose-600 flex items-center justify-center">
+                <Globe className="h-5 w-5 text-white" />
+              </div>
+              <div className="flex-1">
+                <CardTitle className="text-white">YouTube</CardTitle>
+                <CardDescription className="text-xs">Upload videos and schedule publishing</CardDescription>
+              </div>
+              <Badge variant={youtubeStatus?.has_access_token ? 'default' : 'secondary'}>
+                {youtubeStatus?.has_access_token ? 'Connected' : youtubeStatus?.has_credentials ? 'Credentials Saved' : 'Not Connected'}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {youtubeStatus?.requires_oauth && (
+              <div className="bg-orange-950/20 border border-orange-900 rounded p-2 text-xs text-orange-400">
+                <AlertTriangle className="h-4 w-4 inline mr-1" />
+                OAuth required - Click "Connect" below
+              </div>
+            )}
+            {youtubeStatus?.channel_info && (
+              <div className="text-xs text-slate-300">
+                <div className="font-semibold">Connected Channel:</div>
+                <div>{youtubeStatus.channel_info.title}</div>
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs text-slate-400">Client ID</Label>
+                <Input
+                  placeholder="Google OAuth Client ID"
+                  value={keys.yt_client_id || ''}
+                  onChange={e => setKeys(p => ({ ...p, yt_client_id: e.target.value }))}
+                  className="bg-slate-900 border-slate-700 text-xs"
+                />
+              </div>
+              <div>
+                <Label className="text-xs text-slate-400">Client Secret</Label>
+                <Input
+                  type="password"
+                  placeholder="Client Secret"
+                  value={keys.yt_client_secret || ''}
+                  onChange={e => setKeys(p => ({ ...p, yt_client_secret: e.target.value }))}
+                  className="bg-slate-900 border-slate-700 text-xs"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => onSaveIntegration('youtube', { client_id: keys.yt_client_id, client_secret: keys.yt_client_secret })}
+                disabled={!keys.yt_client_id || saving === 'youtube'}
+                className="flex-1 bg-violet-600 hover:bg-violet-700"
+              >
+                {saving === 'youtube' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}
+                Save
+              </Button>
+              {youtubeStatus?.requires_oauth && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onYoutubeAuth}
+                  className="border-slate-700"
+                >
+                  <ExternalLink className="h-3 w-3 mr-1" />
+                  Connect
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Coming Soon - Instagram */}
+        <Card className="bg-slate-800/30 border-slate-700 opacity-60">
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center">
+                <Instagram className="h-5 w-5 text-white" />
+              </div>
+              <div className="flex-1">
+                <CardTitle className="text-white">Instagram</CardTitle>
+                <CardDescription className="text-xs">Auto-post reels and stories</CardDescription>
+              </div>
+              <Badge variant="outline" className="border-slate-600">Coming Soon</Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-slate-500">Future support for automatic Instagram posting</p>
+          </CardContent>
+        </Card>
+
+        {/* Coming Soon - TikTok */}
+        <Card className="bg-slate-800/30 border-slate-700 opacity-60">
+          <CardHeader>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-lg bg-gradient-to-br from-cyan-500 to-pink-500 flex items-center justify-center">
+                <Music className="h-5 w-5 text-white" />
+              </div>
+              <div className="flex-1">
+                <CardTitle className="text-white">TikTok</CardTitle>
+                <CardDescription className="text-xs">Auto-upload short-form videos</CardDescription>
+              </div>
+              <Badge variant="outline" className="border-slate-600">Coming Soon</Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-slate-500">Future support for TikTok video publishing</p>
           </CardContent>
         </Card>
       </div>
@@ -124,638 +1368,913 @@ function LoginPage() {
   );
 }
 
-// ======================== SIDEBAR ========================
-function Sidebar({ currentView, onNavigate, session }) {
-  const items = [
-    { key:'dashboard', label:'Dashboard', icon: LayoutDashboard },
-    { key:'new-project', label:'New Project', icon: PlusCircle },
-    { key:'projects', label:'Projects', icon: FolderKanban },
-    { key:'scheduled', label:'Scheduled', icon: CalendarClock },
-    { key:'integrations', label:'Integrations', icon: Plug },
-    { key:'settings', label:'Settings', icon: Settings },
-  ];
-  return (
-    <div className="w-64 h-screen flex flex-col border-r border-border/50 bg-card/50 backdrop-blur">
-      <div className="p-5 flex items-center gap-3">
-        <div className="p-1.5 rounded-lg bg-gradient-to-br from-violet-600 to-indigo-600"><Sparkles className="h-4 w-4 text-white" /></div>
-        <span className="font-bold text-lg bg-gradient-to-r from-violet-400 to-indigo-400 bg-clip-text text-transparent">CreatorFlow</span>
-      </div>
-      <nav className="flex-1 px-3 space-y-1">
-        {items.map(item => (
-          <button key={item.key} onClick={() => onNavigate(item.key)}
-            className={cn("w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all",
-              currentView === item.key ? "bg-gradient-to-r from-violet-600/20 to-indigo-600/20 text-violet-400 border border-violet-500/20" : "text-muted-foreground hover:text-foreground hover:bg-accent")}>
-            <item.icon className="h-4 w-4" />{item.label}
-          </button>
-        ))}
-      </nav>
-      <div className="p-4 border-t border-border/50">
-        <div className="flex items-center gap-3">
-          <Avatar className="h-8 w-8 border border-border"><AvatarFallback className="bg-gradient-to-br from-violet-600 to-indigo-600 text-white text-xs">{session?.user?.name?.[0]?.toUpperCase() || 'U'}</AvatarFallback></Avatar>
-          <div className="flex-1 min-w-0"><p className="text-sm font-medium truncate">{session?.user?.name}</p><p className="text-xs text-muted-foreground truncate">{session?.user?.email}</p></div>
-          <Button variant="ghost" size="icon" onClick={() => signOut()} className="h-8 w-8 text-muted-foreground hover:text-foreground"><LogOut className="h-4 w-4" /></Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ======================== DASHBOARD ========================
-function DashboardView({ onNavigate }) {
-  const [stats, setStats] = useState(null);
-  const [recent, setRecent] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    api('dashboard/stats').then(d => { if (d.success) { setStats(d.stats); setRecent(d.recent_projects || []); } setLoading(false); });
-  }, []);
-
-  if (loading) return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin text-violet-400" /></div>;
-
-  const cards = [
-    { title:'Total Projects', value: stats?.total || 0, icon: FolderKanban, gradient:'from-violet-500 to-purple-600' },
-    { title:'In Progress', value: stats?.in_progress || 0, icon: Loader2, gradient:'from-blue-500 to-cyan-600' },
-    { title:'Completed', value: stats?.completed || 0, icon: Check, gradient:'from-green-500 to-emerald-600' },
-    { title:'Scheduled', value: stats?.scheduled || 0, icon: CalendarClock, gradient:'from-amber-500 to-orange-600' },
+// ==================== SETUP CHECKLIST ====================
+function SetupChecklist({ integrations, youtubeStatus }) {
+  const checks = [
+    {
+      name: 'OpenAI API Key',
+      status: integrations.find(i => i.provider === 'openai')?.is_connected,
+      required: 'Required for AI idea evaluation, script generation, scenes, and metadata'
+    },
+    {
+      name: 'HeyGen API Key',
+      status: integrations.find(i => i.provider === 'heygen')?.is_connected,
+      required: 'Required for avatar video generation'
+    },
+    {
+      name: 'YouTube OAuth',
+      status: youtubeStatus?.connected && youtubeStatus?.has_access_token,
+      required: 'Required for uploading and scheduling videos to YouTube'
+    }
   ];
 
+  const allComplete = checks.every(c => c.status);
+
   return (
-    <div className="p-8">
-      <div className="flex items-center justify-between mb-8">
-        <div><h2 className="text-2xl font-bold">Dashboard</h2><p className="text-muted-foreground">Your content pipeline at a glance</p></div>
-        <Button onClick={() => onNavigate('new-project')} className="bg-gradient-to-r from-violet-600 to-indigo-600"><PlusCircle className="h-4 w-4 mr-2" />New Project</Button>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        {cards.map(c => (
-          <Card key={c.title} className="border-border/50 hover:border-violet-500/30 transition-colors">
-            <CardContent className="p-5">
-              <div className="flex items-center justify-between">
-                <div><p className="text-sm text-muted-foreground">{c.title}</p><p className="text-3xl font-bold mt-1">{c.value}</p></div>
-                <div className={cn("p-3 rounded-xl bg-gradient-to-br", c.gradient)}><c.icon className="h-5 w-5 text-white" /></div>
+    <Card className={`border-2 ${allComplete ? 'border-green-600 bg-green-950/20' : 'border-orange-600 bg-orange-950/20'}`}>
+      <CardHeader>
+        <CardTitle className="text-white flex items-center gap-2">
+          <CheckSquare className="h-5 w-5" />
+          Setup Checklist for End-to-End Testing
+        </CardTitle>
+        <CardDescription>
+          {allComplete ? 'All integrations configured! Ready for full pipeline testing.' : 'Complete these integrations to enable full pipeline functionality.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-3">
+          {checks.map((check, idx) => (
+            <div key={idx} className="flex items-start gap-3 p-3 rounded bg-slate-800/50">
+              {check.status ? (
+                <CheckCircle2 className="h-5 w-5 text-green-500 flex-shrink-0 mt-0.5" />
+              ) : (
+                <XCircle className="h-5 w-5 text-orange-500 flex-shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <div className="text-sm font-medium text-white">{check.name}</div>
+                <div className="text-xs text-slate-400">{check.required}</div>
               </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-      <Card className="border-border/50">
-        <CardHeader><CardTitle className="text-lg">Recent Projects</CardTitle></CardHeader>
-        <CardContent>
-          {recent.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <FolderKanban className="h-12 w-12 mx-auto mb-3 opacity-30" />
-              <p>No projects yet. Create your first one!</p>
-              <Button variant="outline" onClick={() => onNavigate('new-project')} className="mt-3"><PlusCircle className="h-4 w-4 mr-2" />New Project</Button>
+              <Badge variant={check.status ? 'default' : 'secondary'}>
+                {check.status ? 'Ready' : 'Pending'}
+              </Badge>
             </div>
-          ) : (
-            <div className="space-y-2">
-              {recent.map(p => (
-                <button key={p._id} onClick={() => onNavigate('project-detail', p._id)}
-                  className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-accent/50 transition-colors text-left">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className={cn("w-2 h-2 rounded-full flex-shrink-0", STATUS_COLORS[p.status])} />
-                    <div className="min-w-0"><p className="font-medium truncate">{p.concept}</p><p className="text-xs text-muted-foreground">{new Date(p.created_at).toLocaleDateString()}</p></div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-xs">{STATUS_LABELS[p.status]}</Badge>
-                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-// ======================== NEW PROJECT ========================
-function NewProjectView({ onNavigate }) {
-  const [concept, setConcept] = useState('');
-  const [duration, setDuration] = useState('60');
-  const [aspectRatio, setAspectRatio] = useState('16:9');
-  const [language, setLanguage] = useState('English');
-  const [contentStyle, setContentStyle] = useState('professional');
-  const [publishingMode, setPublishingMode] = useState('draft');
-  const [scheduleAt, setScheduleAt] = useState('');
-  const [autoRun, setAutoRun] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const handleCreate = async () => {
-    if (!concept.trim()) { toast.error('Please enter a concept'); return; }
-    setLoading(true);
-    const data = await api('projects', { method: 'POST', body: JSON.stringify({
-      concept: concept.trim(), duration_seconds: parseInt(duration), aspect_ratio: aspectRatio,
-      language, content_style: contentStyle, publishing_mode: publishingMode, schedule_at: scheduleAt || null
-    })});
-    if (data.success) {
-      toast.success('Project created!');
-      if (autoRun) {
-        toast.info('Running pipeline...');
-        await api(`projects/${data.project._id}/run-pipeline`, { method: 'POST' });
-        toast.success('Pipeline completed!');
-      }
-      onNavigate('project-detail', data.project._id);
-    } else { toast.error(data.message || 'Failed to create'); }
-    setLoading(false);
-  };
-
-  return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <div className="mb-6"><h2 className="text-2xl font-bold">New Project</h2><p className="text-muted-foreground">Define your video concept and let AI do the rest</p></div>
-      <Card className="border-border/50">
-        <CardContent className="p-6 space-y-5">
-          <div className="space-y-2"><Label>Video Concept *</Label><Textarea placeholder="Describe your video idea in detail... e.g., 'How AI is revolutionizing content creation for small businesses'" value={concept} onChange={e => setConcept(e.target.value)} rows={4} className="resize-none" /></div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2"><Label>Duration</Label>
-              <Select value={duration} onValueChange={setDuration}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>
-                <SelectItem value="30">30 seconds</SelectItem><SelectItem value="60">60 seconds</SelectItem><SelectItem value="180">3 minutes</SelectItem><SelectItem value="480">8 minutes</SelectItem>
-              </SelectContent></Select></div>
-            <div className="space-y-2"><Label>Aspect Ratio</Label>
-              <Select value={aspectRatio} onValueChange={setAspectRatio}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>
-                <SelectItem value="16:9">16:9 Landscape</SelectItem><SelectItem value="9:16">9:16 Portrait</SelectItem><SelectItem value="1:1">1:1 Square</SelectItem>
-              </SelectContent></Select></div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2"><Label>Language</Label><Input value={language} onChange={e => setLanguage(e.target.value)} placeholder="English" /></div>
-            <div className="space-y-2"><Label>Content Style</Label>
-              <Select value={contentStyle} onValueChange={setContentStyle}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>
-                <SelectItem value="professional">Professional</SelectItem><SelectItem value="casual">Casual</SelectItem><SelectItem value="educational">Educational</SelectItem>
-                <SelectItem value="entertaining">Entertaining</SelectItem><SelectItem value="storytelling">Storytelling</SelectItem>
-              </SelectContent></Select></div>
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-2"><Label>Publishing Mode</Label>
-              <Select value={publishingMode} onValueChange={setPublishingMode}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>
-                <SelectItem value="draft">Draft</SelectItem><SelectItem value="immediate">Immediate</SelectItem><SelectItem value="scheduled">Scheduled</SelectItem>
-              </SelectContent></Select></div>
-            {publishingMode === 'scheduled' && <div className="space-y-2"><Label>Schedule Date & Time</Label><Input type="datetime-local" value={scheduleAt} onChange={e => setScheduleAt(e.target.value)} /></div>}
-          </div>
-          <div className="flex items-center gap-3 p-3 rounded-lg bg-accent/30 border border-border/50">
-            <Switch checked={autoRun} onCheckedChange={setAutoRun} /><div><Label className="cursor-pointer">Run full pipeline automatically</Label><p className="text-xs text-muted-foreground">Evaluate, script, scenes, video, metadata, and publish in one go</p></div>
-          </div>
-          <Button className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 h-11" onClick={handleCreate} disabled={!concept.trim() || loading}>
-            {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Rocket className="h-4 w-4 mr-2" />}
-            {loading ? 'Creating...' : 'Create Project'}
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-// ======================== PROJECTS LIST ========================
-function ProjectsListView({ onNavigate, filterScheduled }) {
-  const [projects, setProjects] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const fetchProjects = useCallback(() => {
-    api('projects').then(d => { if (d.success) setProjects(d.projects || []); setLoading(false); });
-  }, []);
-  useEffect(() => { fetchProjects(); }, [fetchProjects]);
-
-  const handleDelete = async (e, id) => {
-    e.stopPropagation();
-    const d = await api(`projects/${id}`, { method: 'DELETE' });
-    if (d.success) { toast.success('Project deleted'); fetchProjects(); }
-  };
-
-  const filtered = filterScheduled ? projects.filter(p => p.status === 'scheduled') : projects;
-
-  if (loading) return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin text-violet-400" /></div>;
-
-  return (
-    <div className="p-8">
-      <div className="flex items-center justify-between mb-6">
-        <div><h2 className="text-2xl font-bold">{filterScheduled ? 'Scheduled' : 'Projects'}</h2><p className="text-muted-foreground">{filtered.length} project{filtered.length !== 1 ? 's' : ''}</p></div>
-        <Button onClick={() => onNavigate('new-project')} className="bg-gradient-to-r from-violet-600 to-indigo-600"><PlusCircle className="h-4 w-4 mr-2" />New Project</Button>
-      </div>
-      {filtered.length === 0 ? (
-        <Card className="border-border/50"><CardContent className="py-12 text-center text-muted-foreground">
-          <FolderKanban className="h-16 w-16 mx-auto mb-4 opacity-20" /><p className="text-lg mb-2">No {filterScheduled ? 'scheduled ' : ''}projects yet</p>
-          <Button variant="outline" onClick={() => onNavigate('new-project')}><PlusCircle className="h-4 w-4 mr-2" />Create Project</Button>
-        </CardContent></Card>
-      ) : (
-        <div className="grid gap-3">
-          {filtered.map(p => (
-            <Card key={p._id} className="border-border/50 hover:border-violet-500/30 transition-all cursor-pointer group" onClick={() => onNavigate('project-detail', p._id)}>
-              <CardContent className="p-4 flex items-center justify-between">
-                <div className="flex items-center gap-4 min-w-0 flex-1">
-                  <div className={cn("w-2.5 h-2.5 rounded-full flex-shrink-0", STATUS_COLORS[p.status])} />
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium truncate">{p.concept}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs text-muted-foreground">{p.duration_seconds}s</span>
-                      <span className="text-xs text-muted-foreground">{p.aspect_ratio}</span>
-                      <span className="text-xs text-muted-foreground">{p.language}</span>
-                      <span className="text-xs text-muted-foreground">{new Date(p.created_at).toLocaleDateString()}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-xs">{STATUS_LABELS[p.status]}</Badge>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-300 hover:bg-red-400/10" onClick={e => handleDelete(e, p._id)}><Trash2 className="h-4 w-4" /></Button>
-                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </CardContent>
-            </Card>
           ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ======================== PIPELINE TRACKER ========================
-function PipelineTracker({ project, onRunStep, actionLoading }) {
-  return (
-    <Card className="border-border/50 mb-6">
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between overflow-x-auto gap-1">
-          {PIPELINE_STEPS.map((step, i) => {
-            const status = getStepStatus(project.status, step);
-            const StepIcon = step.icon;
-            const isLoading = actionLoading === step.action;
-            return (
-              <Fragment key={step.key}>
-                <button onClick={() => onRunStep(step.action)} disabled={!!actionLoading}
-                  className={cn("flex flex-col items-center gap-1.5 p-2 rounded-xl transition-all min-w-[70px] hover:bg-accent/50",
-                    status === 'failed' && "opacity-50")}>
-                  <div className={cn("w-9 h-9 rounded-full flex items-center justify-center border-2 transition-all",
-                    status === 'completed' && "border-green-400 bg-green-400/10",
-                    status === 'current' && "border-violet-400 bg-violet-400/10 animate-pulse",
-                    status === 'pending' && "border-muted-foreground/20 bg-muted",
-                    status === 'failed' && "border-red-400 bg-red-400/10")}>
-                    {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-400" /> :
-                     status === 'completed' ? <Check className="h-3.5 w-3.5 text-green-400" /> :
-                     status === 'failed' ? <X className="h-3.5 w-3.5 text-red-400" /> :
-                     <StepIcon className={cn("h-3.5 w-3.5", status === 'current' ? "text-violet-400" : "text-muted-foreground")} />}
-                  </div>
-                  <span className={cn("text-[10px] font-medium",
-                    status === 'completed' ? "text-green-400" : status === 'current' ? "text-violet-400" : "text-muted-foreground")}>{step.label}</span>
-                </button>
-                {i < PIPELINE_STEPS.length - 1 && <div className={cn("flex-1 h-0.5 min-w-[12px] rounded", status === 'completed' ? "bg-green-400/40" : "bg-border")} />}
-              </Fragment>
-            );
-          })}
         </div>
       </CardContent>
     </Card>
   );
 }
 
-// ======================== PROJECT DETAIL ========================
-function ProjectDetailView({ projectId, onNavigate }) {
-  const [project, setProject] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState('');
-
-  const fetchProject = useCallback(async () => {
-    const d = await api(`projects/${projectId}`);
-    if (d.success) setProject(d.project); setLoading(false);
-  }, [projectId]);
-  useEffect(() => { fetchProject(); }, [fetchProject]);
-
-  const runStep = async (action) => {
-    setActionLoading(action);
-    const d = await api(`projects/${projectId}/${action}`, { method: 'POST' });
-    if (d.success) toast.success(`${action} completed`);
-    else toast.error(d.message || 'Step failed');
-    await fetchProject();
-    setActionLoading('');
-  };
-
-  const runPipeline = async () => {
-    setActionLoading('pipeline');
-    const d = await api(`projects/${projectId}/run-pipeline`, { method: 'POST' });
-    if (d.success) toast.success('Pipeline completed!');
-    else toast.error(d.message || 'Pipeline failed');
-    await fetchProject();
-    setActionLoading('');
-  };
-
-  if (loading) return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin text-violet-400" /></div>;
-  if (!project) return <div className="p-8 text-center"><p className="text-muted-foreground">Project not found</p><Button variant="outline" onClick={() => onNavigate('projects')} className="mt-4">Back to Projects</Button></div>;
-
-  const sc = Array.isArray(project.scenes) ? project.scenes : (project.scenes?.scenes || []);
-
+// ==================== CREATE PROJECT VIEW ====================
+function CreateProjectView({ projectForm, setProjectForm, languages, voices, avatars, validationWarnings, loading, onCancel, onCreate }) {
   return (
-    <div className="p-8 max-w-5xl mx-auto">
-      <div className="flex items-center gap-3 mb-6">
-        <Button variant="ghost" size="icon" onClick={() => onNavigate('projects')} className="h-9 w-9"><ChevronLeft className="h-5 w-5" /></Button>
-        <div className="flex-1 min-w-0">
-          <h2 className="text-xl font-bold truncate">{project.concept}</h2>
-          <div className="flex items-center gap-2 mt-1 flex-wrap">
-            <Badge variant="outline" className="text-xs">{project.duration_seconds}s</Badge>
-            <Badge variant="outline" className="text-xs">{project.aspect_ratio}</Badge>
-            <Badge variant="outline" className="text-xs">{project.language}</Badge>
-            <Badge variant="outline" className="text-xs">{project.content_style}</Badge>
-            <Badge className={cn("text-xs text-white", STATUS_COLORS[project.status])}>{STATUS_LABELS[project.status]}</Badge>
-            
-          </div>
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Create New Project</h2>
+          <p className="text-slate-400 text-sm">Configure your AI-powered content project</p>
         </div>
-        <Button onClick={runPipeline} disabled={!!actionLoading} className="bg-gradient-to-r from-violet-600 to-indigo-600">
-          {actionLoading === 'pipeline' ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Zap className="h-4 w-4 mr-2" />}Run Pipeline
+        <Button variant="ghost" onClick={onCancel} className="text-slate-400">
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Back
         </Button>
       </div>
 
-      <PipelineTracker project={project} onRunStep={runStep} actionLoading={actionLoading} />
-
-      {project.error_message && <Card className="border-red-500/30 bg-red-500/5 mb-6"><CardContent className="p-4 flex items-center gap-3"><X className="h-5 w-5 text-red-400 flex-shrink-0" /><div><p className="font-medium text-red-400">Pipeline Error</p><p className="text-sm text-muted-foreground">{project.error_message}</p></div></CardContent></Card>}
-
-      <div className="space-y-4">
-        {project.idea_evaluation && (
-          <Card className="border-border/50">
-            <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><Lightbulb className="h-4 w-4 text-yellow-400" />Idea Evaluation</CardTitle></CardHeader>
-            <CardContent className="pt-0">
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                <div className="p-3 rounded-lg bg-accent/30"><p className="text-xs text-muted-foreground">Score</p><p className="text-xl font-bold text-violet-400">{project.idea_evaluation.score}/10</p></div>
-                <div className="p-3 rounded-lg bg-accent/30"><p className="text-xs text-muted-foreground">Market</p><p className="text-sm font-semibold capitalize">{project.idea_evaluation.market_potential}</p></div>
-                <div className="p-3 rounded-lg bg-accent/30"><p className="text-xs text-muted-foreground">Competition</p><p className="text-sm font-semibold capitalize">{project.idea_evaluation.competition_level}</p></div>
+      <Card className="bg-slate-800/50 border-slate-700">
+        <CardContent className="pt-6 space-y-6">
+          {/* Validation Warnings */}
+          {validationWarnings.length > 0 && (
+            <div className="bg-orange-950/20 border border-orange-900 rounded-lg p-4 space-y-2">
+              <div className="flex items-center gap-2 text-orange-400 font-semibold">
+                <AlertTriangle className="h-5 w-5" />
+                Validation Warnings
               </div>
-              <p className="text-sm text-muted-foreground mb-3">{project.idea_evaluation.feedback}</p>
-              {project.idea_evaluation.suggestions?.length > 0 && <div><p className="text-xs font-medium mb-1.5">Suggestions:</p><ul className="space-y-1">{project.idea_evaluation.suggestions.map((s,i) => <li key={i} className="text-xs text-muted-foreground flex gap-2"><span className="text-violet-400">•</span>{s}</li>)}</ul></div>}
-            </CardContent>
-          </Card>
-        )}
-
-        {project.script && (
-          <Card className="border-border/50">
-            <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><FileText className="h-4 w-4 text-blue-400" />Script<Badge variant="outline" className="ml-auto text-xs">{project.script.word_count} words</Badge></CardTitle></CardHeader>
-            <CardContent className="pt-0 space-y-3">
-              <div><p className="text-xs font-medium text-muted-foreground mb-1">Hook</p><div className="text-sm bg-accent/30 p-3 rounded-lg border border-border/50">{project.script.hook}</div></div>
-              <div><p className="text-xs font-medium text-muted-foreground mb-1">Full Script</p><div className="text-sm bg-accent/30 p-3 rounded-lg border border-border/50 whitespace-pre-wrap max-h-48 overflow-y-auto">{project.script.full_script}</div></div>
-              <div><p className="text-xs font-medium text-muted-foreground mb-1">Call to Action</p><div className="text-sm bg-accent/30 p-3 rounded-lg border border-border/50">{project.script.cta}</div></div>
-            </CardContent>
-          </Card>
-        )}
-
-        {sc.length > 0 && (
-          <Card className="border-border/50">
-            <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><Film className="h-4 w-4 text-indigo-400" />Scenes<Badge variant="outline" className="ml-auto text-xs">{sc.length} scenes</Badge></CardTitle></CardHeader>
-            <CardContent className="pt-0 space-y-2">
-              {sc.map((s, i) => (
-                <div key={i} className="p-3 rounded-lg bg-accent/30 border border-border/50">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs font-medium">Scene {s.scene_number || i + 1}</span>
-                    <div className="flex gap-1.5"><Badge variant="outline" className="text-[10px] px-1.5">{s.duration_sec}s</Badge><Badge variant="outline" className="text-[10px] px-1.5">{s.visual_type}</Badge></div>
-                  </div>
-                  <p className="text-sm mb-1">{s.speaker_text}</p>
-                  <p className="text-xs text-muted-foreground">{s.background_prompt}</p>
+              {validationWarnings.map((warning, idx) => (
+                <div key={idx} className="text-sm text-orange-300 pl-7">
+                  • {warning.message}
                 </div>
               ))}
-            </CardContent>
-          </Card>
-        )}
+            </div>
+          )}
 
-        {(project.video_url || project.status === 'video_generating') && (
-          <Card className="border-border/50">
-            <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><Video className="h-4 w-4 text-purple-400" />Video</CardTitle></CardHeader>
-            <CardContent className="pt-0">
-              {project.status === 'video_generating' && !project.video_url ? (
-                <div className="flex items-center gap-3 p-4 bg-accent/30 rounded-lg"><Loader2 className="h-5 w-5 animate-spin text-violet-400" /><span className="text-sm">Generating video...</span>
-                  <Button size="sm" variant="outline" className="ml-auto" onClick={() => runStep('poll')} disabled={!!actionLoading}><RefreshCw className="h-3 w-3 mr-1" />Poll</Button></div>
-              ) : project.video_url ? (
-                <div className="rounded-lg overflow-hidden bg-black/50 border border-border/50"><video controls className="w-full max-h-80" src={project.video_url} /></div>
-              ) : null}
-            </CardContent>
-          </Card>
-        )}
+          <div>
+            <Label className="text-white">Video Concept *</Label>
+            <Input
+              placeholder="e.g., 5 productivity tips for remote workers"
+              value={projectForm.concept}
+              onChange={e => setProjectForm(p => ({ ...p, concept: e.target.value }))}
+              className="bg-slate-900 border-slate-700 text-white mt-2"
+            />
+          </div>
 
-        {project.metadata && (
-          <Card className="border-border/50">
-            <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><Tag className="h-4 w-4 text-pink-400" />Metadata</CardTitle></CardHeader>
-            <CardContent className="pt-0 space-y-3">
-              <div><p className="text-xs font-medium text-muted-foreground mb-1">Title</p><p className="font-medium">{project.metadata.title}</p></div>
-              {project.metadata.alt_titles?.length > 0 && <div><p className="text-xs font-medium text-muted-foreground mb-1">Alternatives</p>{project.metadata.alt_titles.map((t,i) => <p key={i} className="text-sm text-muted-foreground">• {t}</p>)}</div>}
-              <div><p className="text-xs font-medium text-muted-foreground mb-1">Description</p><div className="text-sm bg-accent/30 p-3 rounded-lg border border-border/50 whitespace-pre-wrap max-h-40 overflow-y-auto">{project.metadata.description}</div></div>
-              <div><p className="text-xs font-medium text-muted-foreground mb-1">Tags</p><div className="flex flex-wrap gap-1.5">{(project.metadata.tags || []).map((t,i) => <Badge key={i} variant="secondary" className="text-xs">{t}</Badge>)}</div></div>
-              <div><p className="text-xs font-medium text-muted-foreground mb-1">Hashtags</p><div className="flex flex-wrap gap-1.5">{(project.metadata.hashtags || []).map((h,i) => <Badge key={i} variant="outline" className="text-xs text-violet-400">{h}</Badge>)}</div></div>
-              {project.metadata.thumbnail_prompt && <div><p className="text-xs font-medium text-muted-foreground mb-1">Thumbnail Prompt</p><div className="text-sm bg-accent/30 p-3 rounded-lg border border-border/50">{project.metadata.thumbnail_prompt}</div></div>}
-            </CardContent>
-          </Card>
-        )}
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <Label className="text-white">Duration</Label>
+              <Select value={String(projectForm.duration_seconds)} onValueChange={v => setProjectForm(p => ({ ...p, duration_seconds: parseInt(v) }))}>
+                <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="30">30 seconds</SelectItem>
+                  <SelectItem value="60">60 seconds</SelectItem>
+                  <SelectItem value="180">3 minutes</SelectItem>
+                  <SelectItem value="480">8 minutes</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
 
-        {(project.youtube_video_id || project.status === 'youtube_uploaded' || project.status === 'scheduled') && (
-          <Card className="border-border/50">
-            <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><Globe className="h-4 w-4 text-red-400" />YouTube</CardTitle></CardHeader>
-            <CardContent className="pt-0">
-              <div className="flex items-center gap-3"><Badge className={project.status === 'scheduled' ? 'bg-emerald-500' : 'bg-green-500'}>{project.status === 'scheduled' ? 'Scheduled' : 'Uploaded'}</Badge>
-                {project.youtube_video_id && <span className="text-sm text-muted-foreground">ID: {project.youtube_video_id}</span>}
-                {project.schedule_at && <span className="text-sm text-muted-foreground">Scheduled: {new Date(project.schedule_at).toLocaleString()}</span>}
+            <div>
+              <Label className="text-white">Aspect Ratio</Label>
+              <Select value={projectForm.aspect_ratio} onValueChange={v => setProjectForm(p => ({ ...p, aspect_ratio: v }))}>
+                <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="16:9">16:9 (Landscape - YouTube)</SelectItem>
+                  <SelectItem value="9:16">9:16 (Portrait - TikTok/Reels)</SelectItem>
+                  <SelectItem value="1:1">1:1 (Square - Instagram)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <Label className="text-white">Language</Label>
+              <Select value={projectForm.language} onValueChange={v => setProjectForm(p => ({ ...p, language: v }))}>
+                <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {languages.map(lang => (
+                    <SelectItem key={lang.code} value={lang.name}>{lang.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label className="text-white">Content Style</Label>
+              <Select value={projectForm.content_style} onValueChange={v => setProjectForm(p => ({ ...p, content_style: v }))}>
+                <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="professional">Professional</SelectItem>
+                  <SelectItem value="casual">Casual & Friendly</SelectItem>
+                  <SelectItem value="educational">Educational</SelectItem>
+                  <SelectItem value="entertaining">Entertaining</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {voices.length > 0 && (
+            <div>
+              <Label className="text-white">Voice (Optional)</Label>
+              <Select value={projectForm.selected_voice_id || 'auto'} onValueChange={v => setProjectForm(p => ({ ...p, selected_voice_id: v === 'auto' ? '' : v }))}>
+                <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                  <SelectValue placeholder="Auto-select from language" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto-select from language</SelectItem>
+                  {voices.map(voice => (
+                    <SelectItem key={voice.voice_id} value={voice.voice_id}>
+                      {voice.voice_name} ({voice.language}, {voice.gender})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {avatars.length > 0 && (
+            <div>
+              <Label className="text-white">Avatar (Optional)</Label>
+              <Select value={projectForm.selected_avatar_id || 'auto'} onValueChange={v => setProjectForm(p => ({ ...p, selected_avatar_id: v === 'auto' ? '' : v }))}>
+                <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                  <SelectValue placeholder="Auto-select first available" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto-select first available</SelectItem>
+                  {avatars.map(avatar => (
+                    <SelectItem key={avatar.avatar_id} value={avatar.avatar_id}>
+                      {avatar.avatar_name} ({avatar.gender})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <div>
+            <Label className="text-white">Publishing Mode *</Label>
+            <Select value={projectForm.publishing_mode} onValueChange={v => setProjectForm(p => ({ ...p, publishing_mode: v }))}>
+              <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="draft">Draft (No publishing)</SelectItem>
+                <SelectItem value="scheduled">Scheduled (Choose date & time)</SelectItem>
+                <SelectItem value="instant">Instant Publish (Publish immediately)</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-slate-400 mt-1">
+              {projectForm.publishing_mode === 'draft' && 'Content will be generated but not published'}
+              {projectForm.publishing_mode === 'scheduled' && 'Video will be uploaded and published at your chosen time'}
+              {projectForm.publishing_mode === 'instant' && 'Video will be uploaded and published immediately'}
+            </p>
+          </div>
+
+          {projectForm.publishing_mode === 'scheduled' && (
+            <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4 space-y-4">
+              <div className="text-sm font-semibold text-white flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-violet-400" />
+                Schedule Publishing Date & Time
               </div>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-white">Date *</Label>
+                  <Input
+                    type="date"
+                    value={projectForm.schedule_date}
+                    onChange={e => setProjectForm(p => ({ ...p, schedule_date: e.target.value }))}
+                    min={new Date().toISOString().split('T')[0]}
+                    required={projectForm.publishing_mode === 'scheduled'}
+                    className="bg-slate-900 border-slate-700 text-white mt-2"
+                  />
+                </div>
+                <div>
+                  <Label className="text-white">Time *</Label>
+                  <Input
+                    type="time"
+                    value={projectForm.schedule_time}
+                    onChange={e => setProjectForm(p => ({ ...p, schedule_time: e.target.value }))}
+                    required={projectForm.publishing_mode === 'scheduled'}
+                    className="bg-slate-900 border-slate-700 text-white mt-2"
+                  />
+                </div>
+              </div>
+              {projectForm.schedule_date && projectForm.schedule_time && (
+                <div className="text-xs text-slate-400">
+                  Video will be published on: {new Date(`${projectForm.schedule_date}T${projectForm.schedule_time}`).toLocaleString()}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex gap-3 pt-4">
+            <Button
+              onClick={onCreate}
+              disabled={!projectForm.concept || loading}
+              className="flex-1 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700"
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
+              Create Project
+            </Button>
+            <Button variant="outline" onClick={onCancel} className="border-slate-700">
+              Cancel
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
 
-// ======================== INTEGRATIONS ========================
-function IntegrationsView() {
-  const [integrations, setIntegrations] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState('');
-  const [testing, setTesting] = useState('');
-  const [keys, setKeys] = useState({ openai: '', heygen: '', heygen_avatar_id: '', yt_client_id: '', yt_client_secret: '' });
-  const [showKeys, setShowKeys] = useState({});
-  const [avatars, setAvatars] = useState([]);
+// ==================== PROJECT DETAIL VIEW ====================
+function ProjectDetailView({ 
+  project, 
+  onBack, 
+  onDelete, 
+  onRunStep, 
+  onSelectThumbnail, 
+  onUpdateConcept,
+  onApplySuggestedTopic,
+  onRunFullPipeline,
+  loading, 
+  pollingVideo, 
+  youtubeStatus, 
+  pipelineRunning,
+  calculateProgress, 
+  getCurrentStep 
+}) {
+  // Local states for concept editing
+  const [editingConcept, setEditingConcept] = useState(false);
+  const [editedConcept, setEditedConcept] = useState('');
+  
+  const progress = calculateProgress(project);
+  const currentStep = getCurrentStep(project);
 
-  const fetchIntegrations = useCallback(async () => {
-    const d = await api('integrations'); if (d.success) setIntegrations(d.integrations || []); setLoading(false);
-  }, []);
-  useEffect(() => { fetchIntegrations(); }, [fetchIntegrations]);
-
-  const isConnected = (p) => integrations.find(i => i.provider === p)?.is_connected;
-
-  const handleSave = async (provider, config) => {
-    setSaving(provider);
-    const d = await api('integrations', { method: 'POST', body: JSON.stringify({ provider, config_json: config }) });
-    if (d.success) {
-      if (d.connected) {
-        toast.success(`${provider}: ${d.message || 'Connected successfully!'}`);
-        if (d.avatars) setAvatars(d.avatars);
-      }
-      else { toast.error(`${provider}: ${d.message || 'Key saved but validation failed. Not marked as connected.'}`); }
-      fetchIntegrations();
-    } else toast.error(d.message);
-    setSaving('');
-  };
-
-  const handleTest = async (provider) => {
-    setTesting(provider);
-    const d = await api('integrations/test', { method: 'POST', body: JSON.stringify({ provider }) });
-    if (d.success && d.connected) toast.success(`${provider}: ${d.message}`);
-    else toast.error(`${provider}: ${d.message || 'Connection failed'}`);
-    fetchIntegrations();
-    setTesting('');
-  };
-
-  const handleDisconnect = async (provider) => {
-    await api(`integrations/${provider}`, { method: 'DELETE' });
-    toast.success(`${provider} disconnected`); fetchIntegrations();
-  };
-
-  const handleYoutubeAuth = async () => {
-    const d = await api('youtube/auth');
-    if (d.success && d.auth_url) window.open(d.auth_url, '_blank');
-    else toast.error(d.message || 'YouTube not configured');
-  };
-
-  if (loading) return <div className="flex items-center justify-center h-full"><Loader2 className="h-8 w-8 animate-spin text-violet-400" /></div>;
-
-  const providers = [
-    { key: 'openai', name: 'OpenAI', desc: 'AI-powered idea evaluation, script generation, scenes, and metadata', gradient: 'from-green-500 to-emerald-600', icon: <Sparkles className="h-5 w-5 text-white" />,
-      fields: (
-        <div className="space-y-3">
-          <div className="space-y-1.5"><Label className="text-xs">API Key</Label>
-            <div className="relative"><Input type={showKeys.openai ? 'text' : 'password'} placeholder="sk-..." value={keys.openai} onChange={e => setKeys(p => ({...p, openai: e.target.value}))} className="pr-10" />
-              <button className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setShowKeys(p => ({...p, openai: !p.openai}))}>{showKeys.openai ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button></div></div>
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => handleSave('openai', { api_key: keys.openai })} disabled={!keys.openai || saving === 'openai'} className="flex-1">{saving === 'openai' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}Save</Button>
-            <Button size="sm" variant="outline" onClick={() => handleTest('openai')} disabled={testing === 'openai'}>{testing === 'openai' ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Test'}</Button>
-          </div>
-        </div>
-      )},
-    { key: 'heygen', name: 'HeyGen', desc: 'AI avatar video generation from scripts and scenes', gradient: 'from-purple-500 to-violet-600', icon: <Video className="h-5 w-5 text-white" />,
-      fields: (
-        <div className="space-y-3">
-          <div className="space-y-1.5"><Label className="text-xs">API Key</Label>
-            <div className="relative"><Input type={showKeys.heygen ? 'text' : 'password'} placeholder="Your HeyGen API key" value={keys.heygen} onChange={e => setKeys(p => ({...p, heygen: e.target.value}))} className="pr-10" />
-              <button className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setShowKeys(p => ({...p, heygen: !p.heygen}))}>{showKeys.heygen ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button></div></div>
-          <div className="space-y-1.5"><Label className="text-xs">Avatar ID <span className="text-muted-foreground">(auto-detected on save, or paste your own)</span></Label>
-            <div className="flex gap-2">
-              <Input placeholder="Auto-detected from your account" value={keys.heygen_avatar_id} onChange={e => setKeys(p => ({...p, heygen_avatar_id: e.target.value}))} className="flex-1" />
-              <Button size="sm" variant="outline" onClick={async () => {
-                const d = await api('heygen/avatars');
-                if (d.success && d.avatars?.length > 0) {
-                  setAvatars(d.avatars);
-                  if (!keys.heygen_avatar_id) setKeys(p => ({...p, heygen_avatar_id: d.avatars[0].avatar_id}));
-                  toast.success(`${d.avatars.length} avatar(s) found`);
-                } else { toast.error(d.message || 'No avatars found'); }
-              }}>Load</Button>
-            </div>
-            {avatars.length > 0 && (
-              <Select value={keys.heygen_avatar_id} onValueChange={v => setKeys(p => ({...p, heygen_avatar_id: v}))}>
-                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select avatar" /></SelectTrigger>
-                <SelectContent>{avatars.map(a => <SelectItem key={a.avatar_id} value={a.avatar_id}>{a.avatar_name} ({a.avatar_id})</SelectItem>)}</SelectContent>
-              </Select>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => handleSave('heygen', { api_key: keys.heygen, ...(keys.heygen_avatar_id ? { avatar_id: keys.heygen_avatar_id } : {}) })} disabled={!keys.heygen || saving === 'heygen'} className="flex-1">{saving === 'heygen' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}Save</Button>
-            <Button size="sm" variant="outline" onClick={() => handleTest('heygen')} disabled={testing === 'heygen'}>{testing === 'heygen' ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Test'}</Button>
-          </div>
-        </div>
-      )},
-    { key: 'youtube', name: 'YouTube', desc: 'Upload videos and schedule publishing via YouTube Data API', gradient: 'from-red-500 to-rose-600', icon: <Globe className="h-5 w-5 text-white" />,
-      fields: (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5"><Label className="text-xs">Client ID</Label><Input placeholder="Google OAuth Client ID" value={keys.yt_client_id} onChange={e => setKeys(p => ({...p, yt_client_id: e.target.value}))} /></div>
-            <div className="space-y-1.5"><Label className="text-xs">Client Secret</Label>
-              <div className="relative"><Input type={showKeys.youtube ? 'text' : 'password'} placeholder="Client Secret" value={keys.yt_client_secret} onChange={e => setKeys(p => ({...p, yt_client_secret: e.target.value}))} className="pr-10" />
-                <button className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setShowKeys(p => ({...p, youtube: !p.youtube}))}>{showKeys.youtube ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}</button></div></div>
-          </div>
-          <div className="flex gap-2">
-            <Button size="sm" onClick={() => handleSave('youtube', { client_id: keys.yt_client_id, client_secret: keys.yt_client_secret })} disabled={(!keys.yt_client_id && !keys.yt_client_secret) || saving === 'youtube'} className="flex-1">{saving === 'youtube' ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Check className="h-3 w-3 mr-1" />}Save</Button>
-            <Button size="sm" variant="outline" onClick={handleYoutubeAuth}><Send className="h-3 w-3 mr-1" />Connect OAuth</Button>
-          </div>
-        </div>
-      )},
+  const pipelineSteps = [
+    { key: 'evaluate', name: 'Idea Evaluation', endpoint: 'evaluate', icon: Award, data: project.idea_evaluation, alwaysShow: true },
+    { key: 'script', name: 'Script Generation', endpoint: 'generate-script', icon: Sparkles, data: project.script_data, alwaysShow: true },
+    { key: 'scenes', name: 'Scene Creation', endpoint: 'generate-scenes', icon: Video, data: project.scenes, alwaysShow: true },
+    { key: 'video', name: 'Video Generation', endpoint: 'generate-video', icon: PlayCircle, data: project.video_url, alwaysShow: true },
+    { key: 'thumbnail', name: 'Thumbnail', endpoint: 'generate-thumbnail', icon: ImageIcon, data: project.thumbnail_data, alwaysShow: true },
+    { key: 'metadata', name: 'Metadata', endpoint: 'generate-metadata', icon: Globe, data: project.metadata, alwaysShow: true },
+    { 
+      key: 'upload', 
+      name: project.publishing_mode === 'draft' ? 'Upload (Optional)' : 'Upload to YouTube', 
+      endpoint: 'publish-youtube', 
+      icon: Upload, 
+      data: project.youtube_video_id,
+      showFor: ['scheduled', 'instant'] // Only show for scheduled and instant modes
+    },
+    { 
+      key: 'schedule', 
+      name: 'Schedule Publishing', 
+      endpoint: 'schedule-youtube', 
+      icon: Calendar, 
+      data: project.status === 'scheduled',
+      showFor: ['scheduled'] // Only show for scheduled mode
+    }
   ];
 
+  const getStepStatus = (stepKey) => {
+    return project.pipeline_state?.[stepKey]?.status || 'pending';
+  };
+
+  const getStatusIcon = (status) => {
+    if (status === 'completed') return <CheckCircle2 className="h-5 w-5 text-green-500" />;
+    if (status === 'running') return <Loader2 className="h-5 w-5 animate-spin text-blue-500" />;
+    if (status === 'failed') return <AlertCircle className="h-5 w-5 text-red-500" />;
+    return <div className="h-5 w-5 rounded-full border-2 border-slate-600" />;
+  };
+
+  const getScoreColor = (score) => {
+    if (score >= 9) return 'text-yellow-500';
+    if (score >= 7) return 'text-green-500';
+    if (score >= 5) return 'text-orange-500';
+    return 'text-red-500';
+  };
+
+  // Filter steps based on publishing mode
+  const visibleSteps = pipelineSteps.filter(step => {
+    if (step.alwaysShow) return true;
+    if (!step.showFor) return true;
+    return step.showFor.includes(project.publishing_mode);
+  });
+
   return (
-    <div className="p-8 max-w-3xl mx-auto">
-      <div className="mb-6"><h2 className="text-2xl font-bold">Integrations</h2><p className="text-muted-foreground">Connect your services to enable real AI-powered content generation</p></div>
-      <div className="space-y-4">
-        {providers.map(p => (
-          <Card key={p.key} className={cn("border-border/50 transition-all", isConnected(p.key) && "border-green-500/30")}>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={cn("p-2 rounded-lg bg-gradient-to-br", p.gradient)}>{p.icon}</div>
-                  <div><CardTitle className="text-base">{p.name}</CardTitle><CardDescription className="text-xs">{p.desc}</CardDescription></div>
-                </div>
-                <Badge variant={isConnected(p.key) ? 'default' : 'outline'} className={cn("text-xs", isConnected(p.key) ? 'bg-green-500 hover:bg-green-600' : '')}>{isConnected(p.key) ? 'Connected' : 'Not Connected'}</Badge>
-              </div>
-            </CardHeader>
-            <CardContent className="pt-0">
-              {p.fields}
-              {isConnected(p.key) && <Button variant="outline" size="sm" className="mt-3 text-red-400 border-red-400/30 hover:bg-red-400/10" onClick={() => handleDisconnect(p.key)}><Trash2 className="h-3 w-3 mr-1" />Disconnect</Button>}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-      <Card className="border-border/50 mt-6 bg-accent/20">
-        <CardContent className="p-4">
-          <div className="flex items-start gap-3">
-            <Zap className="h-5 w-5 text-green-400 mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="text-sm font-medium">Live Mode</p>
-              <p className="text-xs text-muted-foreground mt-1">All integrations run against real APIs. Connect your API keys above to enable each pipeline step. Steps will fail with a clear error if the required integration is not connected.</p>
+    <div className="max-w-5xl mx-auto space-y-6">
+      <div className="flex items-center justify-between">
+        <div className="flex-1">
+          <Button variant="ghost" onClick={onBack} className="text-slate-400 mb-2">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to Projects
+          </Button>
+          <h2 className="text-2xl font-bold text-white">{project.concept}</h2>
+          <p className="text-slate-400 text-sm">
+            {project.aspect_ratio} • {project.duration_seconds}s • {project.language} • {project.content_style}
+          </p>
+          <div className="flex items-center gap-4 mt-2 text-xs text-slate-500">
+            <div className="flex items-center gap-1">
+              <Clock className="h-3 w-3" />
+              Created {new Date(project.created_at).toLocaleString()}
             </div>
+            {project.updated_at && (
+              <div className="flex items-center gap-1">
+                <RefreshCw className="h-3 w-3" />
+                Updated {new Date(project.updated_at).toLocaleString()}
+              </div>
+            )}
+          </div>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => onDelete(project._id)}
+          className="text-red-400 hover:text-red-300 hover:bg-red-950"
+        >
+          <Trash2 className="h-4 w-4 mr-2" />
+          Delete
+        </Button>
+      </div>
+
+      {/* Pipeline Steps */}
+      <div className="space-y-4">
+        {visibleSteps.map((step, index) => {
+          const status = getStepStatus(step.key);
+          const StepIcon = step.icon;
+          const isLocked = index > 0 && getStepStatus(visibleSteps[index - 1].key) !== 'completed';
+          
+          // Special lock for upload/schedule if YouTube not connected
+          const isYoutubeStep = step.key === 'upload' || step.key === 'schedule';
+          const youtubeNotReady = isYoutubeStep && (!youtubeStatus?.connected || !youtubeStatus?.has_access_token);
+          
+          // For upload step, show real data or blocked state
+          const showUploadBlock = step.key === 'upload' && youtubeNotReady;
+          const showMockWarning = step.key === 'upload' && status === 'completed' && project.youtube_video_id && project.youtube_video_id.startsWith('mock_');
+
+          return (
+            <Card key={step.key} className={`bg-slate-800/50 border-slate-700 ${(isLocked || youtubeNotReady) ? 'opacity-50' : ''}`}>
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  {getStatusIcon(status)}
+                  <StepIcon className="h-5 w-5 text-violet-400" />
+                  <div className="flex-1">
+                    <CardTitle className="text-base text-white">{step.name}</CardTitle>
+                    <CardDescription className="text-xs capitalize">{status}</CardDescription>
+                  </div>
+                  {youtubeNotReady && (
+                    <Badge variant="destructive" className="text-xs">
+                      YouTube Not Connected
+                    </Badge>
+                  )}
+                  {!isLocked && !youtubeNotReady && status !== 'running' && (
+                    <div className="flex gap-2">
+                      {step.data && status === 'completed' && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onRunStep(project._id, step.endpoint, true)}
+                          disabled={loading}
+                          className="border-slate-600"
+                        >
+                          <RefreshCw className="h-3 w-3 mr-1" />
+                          Regenerate
+                        </Button>
+                      )}
+                      {(!step.data || status === 'failed') && (
+                        <Button
+                          size="sm"
+                          onClick={() => onRunStep(project._id, step.endpoint, false)}
+                          disabled={loading || isLocked}
+                          className="bg-violet-600 hover:bg-violet-700"
+                        >
+                          <Play className="h-3 w-3 mr-1" />
+                          {status === 'failed' ? 'Retry' : 'Run'}
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </CardHeader>
+
+              {/* Step Content */}
+              {step.data && status === 'completed' && (
+                <CardContent className="space-y-3">
+                  {/* Evaluation Display */}
+                  {step.key === 'evaluate' && step.data && (
+                    <div className="space-y-4">
+                      {/* Score and Actions */}
+                      <div className="flex items-start gap-4">
+                        <div className={`text-4xl font-bold ${getScoreColor(step.data.score)}`}>
+                          {step.data.score}/10
+                        </div>
+                        <div className="flex-1 space-y-2">
+                          <div className="flex gap-2 flex-wrap">
+                            {step.data.opportunity_level && (
+                              <Badge variant="secondary">Opportunity: {step.data.opportunity_level}</Badge>
+                            )}
+                            {step.data.competition_level && (
+                              <Badge variant="secondary">Competition: {step.data.competition_level}</Badge>
+                            )}
+                          </div>
+                          
+                          {/* Concept Editing */}
+                          <div className="bg-slate-900/50 p-3 rounded-lg space-y-2">
+                            <div className="flex items-center justify-between">
+                              <Label className="text-xs text-slate-400">Current Concept</Label>
+                              {!editingConcept && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setEditingConcept(true);
+                                    setEditedConcept(project.concept);
+                                  }}
+                                  className="text-xs h-6 px-2"
+                                >
+                                  Edit
+                                </Button>
+                              )}
+                            </div>
+                            
+                            {editingConcept ? (
+                              <div className="space-y-2">
+                                <Input
+                                  value={editedConcept}
+                                  onChange={(e) => setEditedConcept(e.target.value)}
+                                  className="bg-slate-800 border-slate-700 text-sm"
+                                  placeholder="Enter new concept..."
+                                />
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    onClick={async () => {
+                                      const result = await onUpdateConcept(project._id, editedConcept);
+                                      if (result?.success) {
+                                        setEditingConcept(false);
+                                        setEditedConcept('');
+                                      }
+                                    }}
+                                    disabled={loading || !editedConcept.trim()}
+                                    className="bg-violet-600 hover:bg-violet-700 text-xs"
+                                  >
+                                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                                    Save & Re-evaluate
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      setEditingConcept(false);
+                                      setEditedConcept('');
+                                    }}
+                                    className="text-xs"
+                                  >
+                                    Cancel
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
+                              <p className="text-sm text-slate-200">{project.concept}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Suggested Alternative Topics (if score < 7) */}
+                      {step.data.suggested_topics && step.data.suggested_topics.length > 0 && (
+                        <div className="bg-amber-950/20 border border-amber-800/30 p-4 rounded-lg space-y-3">
+                          <h4 className="text-sm font-semibold text-amber-400 flex items-center gap-2">
+                            <Lightbulb className="h-4 w-4" /> 
+                            Suggested Alternative Topics (Click to Use)
+                          </h4>
+                          <div className="space-y-2">
+                            {step.data.suggested_topics.map((topic, i) => (
+                              <button
+                                key={i}
+                                onClick={async () => {
+                                  const result = await onApplySuggestedTopic(project._id, topic);
+                                  if (result?.success) {
+                                    setEditingConcept(false);
+                                    setEditedConcept('');
+                                  }
+                                }}
+                                className="w-full text-left bg-slate-900/50 hover:bg-slate-900/80 p-3 rounded-lg transition-colors border border-slate-700 hover:border-violet-500"
+                              >
+                                <div className="text-sm text-slate-200 font-medium flex items-center gap-2">
+                                  <span className="text-amber-500">→</span>
+                                  {topic}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-xs text-slate-400">
+                            💡 These alternatives may perform better based on current trends and competition
+                          </p>
+                        </div>
+                      )}
+
+                      {step.data.strengths && step.data.strengths.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-green-400 mb-2 flex items-center gap-2">
+                            <CheckCircle2 className="h-4 w-4" /> Strengths
+                          </h4>
+                          <ul className="space-y-1">
+                            {step.data.strengths.map((strength, i) => (
+                              <li key={i} className="text-sm text-slate-300 flex items-start gap-2">
+                                <span className="text-green-500">•</span>
+                                {strength}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {step.data.weaknesses && step.data.weaknesses.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-orange-400 mb-2 flex items-center gap-2">
+                            <AlertTriangle className="h-4 w-4" /> Weaknesses
+                          </h4>
+                          <ul className="space-y-1">
+                            {step.data.weaknesses.map((weakness, i) => (
+                              <li key={i} className="text-sm text-slate-300 flex items-start gap-2">
+                                <span className="text-orange-500">•</span>
+                                {weakness}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {step.data.recommendations && step.data.recommendations.length > 0 && (
+                        <div>
+                          <h4 className="text-sm font-semibold text-violet-400 mb-2 flex items-center gap-2">
+                            <Lightbulb className="h-4 w-4" /> Recommendations
+                          </h4>
+                          <div className="space-y-2">
+                            {step.data.recommendations.map((rec, i) => (
+                              <div key={i} className="bg-slate-900/50 p-3 rounded-lg">
+                                <div className="text-sm text-slate-200 font-medium">{rec.text}</div>
+                                {rec.why && <div className="text-xs text-slate-400 mt-1">Why: {rec.why}</div>}
+                                {rec.impact && <div className="text-xs text-violet-400 mt-1">Impact: {rec.impact}</div>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* ONE-CLICK PIPELINE BUTTON */}
+                      <div className="bg-gradient-to-r from-violet-950/50 to-blue-950/50 border-2 border-violet-500/30 p-4 rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                              <Sparkles className="h-4 w-4 text-violet-400" />
+                              Ready to Create Your Video?
+                            </h4>
+                            <p className="text-xs text-slate-400 mt-1">
+                              Click below to automatically run the full pipeline: Script → Scenes → Video → Thumbnail → Metadata → {project.publishing_mode !== 'draft' && 'Upload'}
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          onClick={() => onRunFullPipeline(project._id)}
+                          disabled={loading || pipelineRunning}
+                          className="w-full bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-700 hover:to-blue-700 text-white font-semibold"
+                        >
+                          {pipelineRunning ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Pipeline Running...
+                            </>
+                          ) : (
+                            <>
+                              <Play className="h-4 w-4 mr-2" />
+                              Run Full Pipeline (One-Click)
+                            </>
+                          )}
+                        </Button>
+                        {pipelineRunning && (
+                          <p className="text-xs text-center text-slate-400 mt-2">
+                            This may take 5-10 minutes. You'll be notified when complete.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Script Display */}
+                  {step.key === 'script' && step.data && (
+                    <div className="space-y-2">
+                      <div className="bg-slate-900/50 p-3 rounded text-sm text-slate-300 max-h-40 overflow-y-auto whitespace-pre-wrap">
+                        {step.data.full_script}
+                      </div>
+                      <div className="text-xs text-slate-500">{step.data.word_count} words</div>
+                    </div>
+                  )}
+
+                  {/* Scenes Display */}
+                  {step.key === 'scenes' && step.data && (
+                    <div className="space-y-2">
+                      {(Array.isArray(step.data) ? step.data : step.data.scenes || []).slice(0, 5).map((scene, i) => (
+                        <div key={i} className="bg-slate-900/50 p-3 rounded space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="font-semibold text-violet-400">Scene {scene.scene_number}</div>
+                            <Badge variant="secondary" className="text-xs">{scene.duration_sec}s</Badge>
+                          </div>
+                          <div className="text-sm text-slate-300">{scene.speaker_text}</div>
+                          {scene.b_roll_suggestion && (
+                            <div className="flex items-start gap-2 text-xs text-slate-400">
+                              <Film className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                              <span>B-Roll: {scene.b_roll_suggestion}</span>
+                            </div>
+                          )}
+                          {scene.music_mood && (
+                            <div className="flex items-start gap-2 text-xs text-slate-400">
+                              <Music className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                              <span>Music: {scene.music_mood}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                      <div className="text-xs text-slate-500">{(Array.isArray(step.data) ? step.data : step.data.scenes || []).length} scenes total</div>
+                    </div>
+                  )}
+
+                  {/* Video Display */}
+                  {step.key === 'video' && step.data && (
+                    <div className="space-y-2">
+                      <video src={step.data} controls className="w-full rounded-lg max-h-96" />
+                      {pollingVideo === project.video_job_id && (
+                        <div className="flex items-center gap-2 text-sm text-slate-400">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Checking video status...
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Thumbnail Display */}
+                  {step.key === 'thumbnail' && step.data?.images && (
+                    <div className="space-y-3">
+                      <div className="text-xs text-slate-400">Select a thumbnail (3 aspect ratios available):</div>
+                      <div className="grid grid-cols-3 gap-3">
+                        {Object.entries(step.data.images).map(([ratio, url]) => (
+                          <div
+                            key={ratio}
+                            className={`cursor-pointer rounded-lg overflow-hidden border-2 transition-all ${
+                              step.data.selected === url ? 'border-violet-500 ring-2 ring-violet-500' : 'border-slate-700 hover:border-slate-600'
+                            }`}
+                            onClick={() => onSelectThumbnail(project._id, url)}
+                          >
+                            <img src={url} alt={ratio} className="w-full h-auto" />
+                            <div className="bg-slate-900/80 p-2 text-xs text-center text-white font-medium">
+                              {ratio}
+                              {step.data.selected === url && <Check className="h-3 w-3 inline ml-1 text-violet-400" />}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Metadata Display */}
+                  {step.key === 'metadata' && step.data && (
+                    <div className="space-y-2">
+                      <div className="font-semibold text-violet-400">{step.data.title}</div>
+                      <div className="text-xs text-slate-400 max-h-20 overflow-y-auto">
+                        {step.data.description?.substring(0, 300)}...
+                      </div>
+                      <div className="flex gap-1 flex-wrap">
+                        {(step.data.tags || []).slice(0, 8).map((tag, i) => (
+                          <Badge key={i} variant="secondary" className="text-xs">{tag}</Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Upload Display */}
+                  {step.key === 'upload' && step.data && (
+                    <div className="space-y-2">
+                      {showMockWarning ? (
+                        <div className="bg-red-950/20 border border-red-900 rounded p-3 text-sm text-red-400">
+                          <AlertCircle className="h-4 w-4 inline mr-2" />
+                          ⚠️ MOCK UPLOAD DETECTED - This is not a real YouTube upload. Please connect YouTube OAuth and re-upload.
+                        </div>
+                      ) : (
+                        <div className="bg-green-950/20 border border-green-900 rounded p-3 space-y-2">
+                          <div className="text-sm text-green-400 font-semibold flex items-center gap-2">
+                            <CheckCircle2 className="h-4 w-4" />
+                            Video uploaded to YouTube successfully!
+                          </div>
+                          <div className="text-xs text-slate-300 space-y-1">
+                            <div><strong>Video ID:</strong> {project.youtube_video_id}</div>
+                            {project.youtube_url && (
+                              <div>
+                                <strong>YouTube URL:</strong>{' '}
+                                <a href={project.youtube_url} target="_blank" rel="noopener noreferrer" className="text-violet-400 hover:text-violet-300 underline">
+                                  {project.youtube_url}
+                                </a>
+                              </div>
+                            )}
+                            {project.uploaded_at && (
+                              <div><strong>Uploaded:</strong> {new Date(project.uploaded_at).toLocaleString()}</div>
+                            )}
+                            {youtubeStatus?.channel_info && (
+                              <div><strong>Channel:</strong> {youtubeStatus.channel_info.title}</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {showUploadBlock && (
+                    <div className="bg-orange-950/20 border border-orange-900 rounded p-3 text-sm text-orange-400">
+                      <AlertTriangle className="h-4 w-4 inline mr-2" />
+                      YouTube not connected. Please complete OAuth in Integrations before uploading.
+                    </div>
+                  )}
+
+                  {/* Schedule Confirmation */}
+                  {step.key === 'schedule' && step.data && (
+                    <div className="bg-blue-950/20 border border-blue-900 rounded p-3 text-sm text-blue-400">
+                      <Calendar className="h-4 w-4 inline mr-2" />
+                      Video scheduled for publishing on {project.schedule_date} at {project.schedule_time}
+                    </div>
+                  )}
+                </CardContent>
+              )}
+
+              {/* Error Display */}
+              {status === 'failed' && project.pipeline_state?.[step.key]?.error && (
+                <CardContent>
+                  <div className="bg-red-950/20 border border-red-900 rounded p-3 text-sm text-red-400">
+                    <AlertCircle className="h-4 w-4 inline mr-2" />
+                    {project.pipeline_state[step.key].error}
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ==================== SETTINGS VIEW ====================
+function SettingsView({ user, settings, onBack, onSave }) {
+  const [formSettings, setFormSettings] = useState(settings || {
+    theme: 'dark',
+    default_language: 'English',
+    default_aspect_ratio: '16:9',
+    default_publishing_mode: 'draft',
+    default_avatar_id: null,
+    default_voice_id: null
+  });
+
+  const handleSave = () => {
+    onSave(formSettings);
+  };
+
+  return (
+    <div className="max-w-3xl mx-auto space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white">Settings</h2>
+          <p className="text-slate-400 text-sm">Manage your account and preferences</p>
+        </div>
+        <Button variant="ghost" onClick={onBack} className="text-slate-400">
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Back
+        </Button>
+      </div>
+
+      <Card className="bg-slate-800/50 border-slate-700">
+        <CardHeader>
+          <CardTitle className="text-white">Profile Information</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Label className="text-slate-400">Email</Label>
+            <Input value={user.email} disabled className="bg-slate-900 border-slate-700 text-slate-400 mt-2" />
+          </div>
+          <div>
+            <Label className="text-slate-400">Name</Label>
+            <Input value={user.name || ''} disabled className="bg-slate-900 border-slate-700 text-slate-400 mt-2" />
           </div>
         </CardContent>
       </Card>
-    </div>
-  );
-}
 
-// ======================== SETTINGS ========================
-function SettingsView({ session }) {
-  return (
-    <div className="p-8 max-w-2xl mx-auto">
-      <div className="mb-6"><h2 className="text-2xl font-bold">Settings</h2><p className="text-muted-foreground">Manage your account</p></div>
-      <Card className="border-border/50">
-        <CardContent className="p-6 space-y-4">
-          <div><Label className="text-xs text-muted-foreground">Name</Label><p className="font-medium">{session?.user?.name}</p></div>
-          <div><Label className="text-xs text-muted-foreground">Email</Label><p className="font-medium">{session?.user?.email}</p></div>
-          <Separator />
-          <Button variant="destructive" onClick={() => signOut()}><LogOut className="h-4 w-4 mr-2" />Sign Out</Button>
+      <Card className="bg-slate-800/50 border-slate-700">
+        <CardHeader>
+          <CardTitle className="text-white">Default Project Settings</CardTitle>
+          <CardDescription>Set default values for new projects</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Label className="text-white">Default Language</Label>
+            <Select value={formSettings.default_language} onValueChange={v => setFormSettings(p => ({ ...p, default_language: v }))}>
+              <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="English">English</SelectItem>
+                <SelectItem value="Spanish">Spanish</SelectItem>
+                <SelectItem value="French">French</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <Label className="text-white">Default Aspect Ratio</Label>
+            <Select value={formSettings.default_aspect_ratio} onValueChange={v => setFormSettings(p => ({ ...p, default_aspect_ratio: v }))}>
+              <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="16:9">16:9 (Landscape)</SelectItem>
+                <SelectItem value="9:16">9:16 (Portrait)</SelectItem>
+                <SelectItem value="1:1">1:1 (Square)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div>
+            <Label className="text-white">Default Publishing Mode</Label>
+            <Select value={formSettings.default_publishing_mode} onValueChange={v => setFormSettings(p => ({ ...p, default_publishing_mode: v }))}>
+              <SelectTrigger className="bg-slate-900 border-slate-700 mt-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="draft">Draft</SelectItem>
+                <SelectItem value="immediate">Publish Immediately</SelectItem>
+                <SelectItem value="scheduled">Scheduled</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Button onClick={handleSave} className="w-full bg-gradient-to-r from-violet-600 to-indigo-600">
+            <Check className="h-4 w-4 mr-2" />
+            Save Settings
+          </Button>
         </CardContent>
       </Card>
-    </div>
-  );
-}
-
-// ======================== MAIN APP ========================
-export default function App() {
-  const { data: session, status } = useSession();
-  const [currentView, setCurrentView] = useState('dashboard');
-  const [selectedProjectId, setSelectedProjectId] = useState(null);
-
-  const handleNavigate = useCallback((view, projectId = null) => {
-    setCurrentView(view);
-    if (projectId) setSelectedProjectId(projectId);
-  }, []);
-
-  if (status === 'loading') {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-3">
-          <div className="p-3 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600"><Sparkles className="h-8 w-8 text-white animate-pulse" /></div>
-          <p className="text-sm text-muted-foreground">Loading CreatorFlow AI...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!session) return <LoginPage />;
-
-  return (
-    <div className="flex h-screen bg-background">
-      <Sidebar currentView={currentView} onNavigate={handleNavigate} session={session} />
-      <main className="flex-1 overflow-auto">
-        {currentView === 'dashboard' && <DashboardView onNavigate={handleNavigate} />}
-        {currentView === 'new-project' && <NewProjectView onNavigate={handleNavigate} />}
-        {currentView === 'projects' && <ProjectsListView onNavigate={handleNavigate} />}
-        {currentView === 'project-detail' && <ProjectDetailView projectId={selectedProjectId} onNavigate={handleNavigate} />}
-        {currentView === 'integrations' && <IntegrationsView />}
-        {currentView === 'scheduled' && <ProjectsListView onNavigate={handleNavigate} filterScheduled />}
-        {currentView === 'settings' && <SettingsView session={session} />}
-      </main>
     </div>
   );
 }
