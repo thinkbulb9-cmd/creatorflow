@@ -779,62 +779,175 @@ async function handlePublishYoutube(id, userId) {
       return error('No metadata found. Generate metadata first.', 'NO_METADATA', 400);
     }
     
+    console.log('=================================================');
+    console.log('YOUTUBE UPLOAD DEBUG - START');
+    console.log('=================================================');
+    console.log('1. USER INFO:');
+    console.log('   userId:', userId);
+    console.log('   projectId:', id);
+    
     // STRICT: Check YouTube OAuth
     const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
+    
+    console.log('2. INTEGRATION FETCH:');
+    console.log('   integration found?', !!ytInt);
+    console.log('   integration._id:', ytInt?._id);
+    console.log('   integration.user_id:', ytInt?.user_id);
+    console.log('   integration.provider:', ytInt?.provider);
+    console.log('   integration.is_connected:', ytInt?.is_connected);
+    
     if (!ytInt) {
+      console.log('   ❌ NO INTEGRATION FOUND');
+      console.log('=================================================');
       return error('YouTube not connected. Please connect your YouTube account in Integrations.', 'YOUTUBE_NOT_CONNECTED', 403);
     }
     
-    console.log('[YouTube Upload] Checking OAuth tokens...');
-    console.log('[YouTube Upload] Has access_token:', !!ytInt.config_json?.access_token);
-    console.log('[YouTube Upload] Has refresh_token:', !!ytInt.config_json?.refresh_token);
-    console.log('[YouTube Upload] Token expires_at:', ytInt.config_json?.expires_at);
+    console.log('3. CONFIG_JSON STRUCTURE:');
+    console.log('   config_json exists?', !!ytInt.config_json);
+    console.log('   config_json keys:', ytInt.config_json ? Object.keys(ytInt.config_json) : []);
     
-    // Ensure valid token (refresh if needed)
-    let accessToken;
-    try {
-      const tokenResult = await youtubeService.ensureValidToken(ytInt);
-      accessToken = tokenResult.access_token;
-      
-      // If token was refreshed, save new tokens
-      if (tokenResult.expires_at) {
-        console.log('[YouTube Upload] Token was refreshed, saving new tokens...');
-        await db.collection('integrations').updateOne(
-          { user_id: userId, provider: 'youtube' },
-          {
-            $set: {
-              'config_json.access_token': tokenResult.access_token,
-              'config_json.refresh_token': tokenResult.refresh_token,
-              'config_json.expires_at': tokenResult.expires_at,
-              'config_json.expires_in': tokenResult.expires_in,
-              'config_json.token_type': tokenResult.token_type,
-              updated_at: new Date()
-            }
-          }
-        );
-        console.log('[YouTube Upload] New tokens saved');
-      }
-    } catch (tokenError) {
-      console.error('[YouTube Upload] Token validation/refresh failed:', tokenError);
+    const accessToken = ytInt.config_json?.access_token;
+    const refreshToken = ytInt.config_json?.refresh_token;
+    const expiresAt = ytInt.config_json?.expires_at;
+    const clientId = ytInt.config_json?.client_id;
+    const clientSecret = ytInt.config_json?.client_secret;
+    
+    console.log('4. TOKEN VALUES (RAW):');
+    console.log('   access_token exists?', !!accessToken);
+    console.log('   access_token first 20 chars:', accessToken ? accessToken.substring(0, 20) + '...' : 'NULL');
+    console.log('   refresh_token exists?', !!refreshToken);
+    console.log('   refresh_token first 20 chars:', refreshToken ? refreshToken.substring(0, 20) + '...' : 'NULL');
+    console.log('   expires_at:', expiresAt);
+    console.log('   expires_at date:', expiresAt ? new Date(expiresAt).toISOString() : 'NULL');
+    console.log('   client_id exists?', !!clientId);
+    console.log('   client_secret exists?', !!clientSecret);
+    
+    const now = Date.now();
+    const isExpired = expiresAt ? now >= (expiresAt - 300000) : true;
+    
+    console.log('5. TOKEN VALIDATION:');
+    console.log('   current time:', now);
+    console.log('   current time date:', new Date(now).toISOString());
+    console.log('   token isExpired?', isExpired);
+    console.log('   time until expiry (seconds):', expiresAt ? Math.floor((expiresAt - now) / 1000) : 'N/A');
+    
+    // HARD STOP if no tokens
+    if (!accessToken) {
+      console.log('   ❌ NO ACCESS TOKEN - STOPPING');
+      console.log('=================================================');
       return error(
-        `YouTube authentication expired or invalid. ${tokenError.message}. Please reconnect YouTube in Integrations.`,
-        'YOUTUBE_AUTH_EXPIRED',
+        'No access token found. YouTube authentication incomplete. Please reconnect YouTube in Integrations.',
+        'NO_ACCESS_TOKEN',
         403
       );
     }
     
-    console.log('[YouTube Upload] Starting REAL upload for project:', id);
-    console.log('[YouTube Upload] Video URL:', project.video_url);
-    console.log('[YouTube Upload] Metadata:', project.metadata.title);
-    console.log('[YouTube Upload] Using access_token:', accessToken?.substring(0, 20) + '...');
+    if (!refreshToken) {
+      console.log('   ⚠️  NO REFRESH TOKEN - Cannot refresh when expired');
+    }
+    
+    let finalAccessToken = accessToken;
+    let refreshAttempted = false;
+    let refreshSuccess = false;
+    let newTokenGenerated = false;
+    
+    // Token validation and refresh
+    if (isExpired) {
+      console.log('6. TOKEN REFRESH (Token expired):');
+      refreshAttempted = true;
+      
+      if (!refreshToken) {
+        console.log('   ❌ Cannot refresh - no refresh_token');
+        console.log('=================================================');
+        return error(
+          'Access token expired and no refresh token available. Please reconnect YouTube in Integrations.',
+          'TOKEN_EXPIRED_NO_REFRESH',
+          403
+        );
+      }
+      
+      if (!clientId || !clientSecret) {
+        console.log('   ❌ Cannot refresh - missing client credentials');
+        console.log('=================================================');
+        return error(
+          'YouTube OAuth credentials incomplete. Please reconnect YouTube in Integrations.',
+          'MISSING_OAUTH_CREDENTIALS',
+          403
+        );
+      }
+      
+      try {
+        console.log('   Calling refreshAccessToken...');
+        const newTokens = await youtubeService.refreshAccessToken(refreshToken, clientId, clientSecret);
+        
+        refreshSuccess = true;
+        newTokenGenerated = true;
+        finalAccessToken = newTokens.access_token;
+        
+        console.log('   ✅ Refresh SUCCESS');
+        console.log('   new access_token first 20 chars:', finalAccessToken.substring(0, 20) + '...');
+        console.log('   new expires_in:', newTokens.expires_in);
+        
+        // Save new tokens
+        await db.collection('integrations').updateOne(
+          { user_id: userId, provider: 'youtube' },
+          {
+            $set: {
+              'config_json.access_token': newTokens.access_token,
+              'config_json.expires_at': Date.now() + (newTokens.expires_in * 1000),
+              'config_json.refresh_token': newTokens.refresh_token || refreshToken,
+              updated_at: new Date()
+            }
+          }
+        );
+        
+        console.log('   ✅ New tokens saved to database');
+      } catch (refreshError) {
+        console.log('   ❌ Refresh FAILED:', refreshError.message);
+        console.log('=================================================');
+        return error(
+          `YouTube authentication expired and refresh failed: ${refreshError.message}. Please reconnect YouTube in Integrations.`,
+          'TOKEN_REFRESH_FAILED',
+          403
+        );
+      }
+    } else {
+      console.log('6. TOKEN REFRESH:');
+      console.log('   Token still valid, no refresh needed');
+    }
+    
+    console.log('7. FINAL AUTH CHECK:');
+    console.log('   refresh attempted?', refreshAttempted);
+    console.log('   refresh success?', refreshSuccess);
+    console.log('   new token generated?', newTokenGenerated);
+    console.log('   using OAuth client?', true);
+    console.log('   final access_token exists?', !!finalAccessToken);
+    console.log('   final access_token first 20 chars:', finalAccessToken ? finalAccessToken.substring(0, 20) + '...' : 'NULL');
+    
+    // CRITICAL DEBUG OBJECT
+    console.log('8. CRITICAL DEBUG OBJECT:');
+    console.log(JSON.stringify({
+      hasIntegration: !!ytInt,
+      hasAccessToken: !!finalAccessToken,
+      hasRefreshToken: !!refreshToken,
+      tokenExpired: isExpired,
+      usingOAuthClient: true,
+      willAttemptUpload: true
+    }, null, 2));
+    
+    console.log('9. STARTING UPLOAD:');
+    console.log('   Video URL:', project.video_url);
+    console.log('   Video title:', project.metadata.title);
+    console.log('   Privacy status:', project.publishing_mode === 'instant' ? 'public' : 'private');
+    console.log('=================================================');
     
     // Mark step as running
     const updatedState = pipelineService.markStepRunning(pipelineState, 'upload');
     await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
     
-    // REAL YouTube Upload - No Mocks
+    // REAL YouTube Upload with OAuth token
     const uploadResult = await youtubeService.uploadVideo(
-      accessToken, 
+      finalAccessToken, 
       project.video_url, 
       {
         title: project.metadata.title,
@@ -845,7 +958,12 @@ async function handlePublishYoutube(id, userId) {
       }
     );
     
-    console.log('[YouTube Upload] SUCCESS - Real video ID:', uploadResult.video_id);
+    console.log('10. UPLOAD RESULT:');
+    console.log('   SUCCESS - video_id:', uploadResult.video_id);
+    console.log('   url:', uploadResult.url);
+    console.log('=================================================');
+    console.log('YOUTUBE UPLOAD DEBUG - END');
+    console.log('=================================================');
     
     // Mark step as completed with REAL data
     const completedState = pipelineService.markStepCompleted(updatedState, 'upload');
@@ -889,9 +1007,11 @@ async function handlePublishYoutube(id, userId) {
     });
     
   } catch (e) {
-    console.error('[YouTube Upload] FAILED:', e);
-    console.error('[YouTube Upload] Error details:', e.message);
-    console.error('[YouTube Upload] Stack:', e.stack);
+    console.log('=================================================');
+    console.log('YOUTUBE UPLOAD ERROR:');
+    console.log('   Error message:', e.message);
+    console.log('   Error stack:', e.stack);
+    console.log('=================================================');
     
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id });
