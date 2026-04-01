@@ -63,11 +63,6 @@ export default function App() {
   // Loading states
   const [loading, setLoading] = useState(false);
   const [pollingVideo, setPollingVideo] = useState(null);
-  
-  // NEW: Validation and pipeline states
-  const [validation, setValidation] = useState(null);
-  const [pipelineRunning, setPipelineRunning] = useState(false);
-  const [projectFilter, setProjectFilter] = useState('all'); // all, draft, running, published, scheduled, failed
 
   // Fetch data on mount
   useEffect(() => {
@@ -291,65 +286,6 @@ export default function App() {
       }
       if (data.current_step) {
         console.log('[Pipeline] Current active step:', data.current_step.name);
-      }
-    }
-  };
-  
-  // NEW: Validation function
-  const fetchValidation = async (projectId) => {
-    const data = await api(`projects/${projectId}/validate`);
-    if (data.success) {
-      setValidation(data);
-      return data;
-    }
-    return null;
-  };
-  
-  // NEW: Run full pipeline
-  const runFullPipeline = async (projectId) => {
-    setPipelineRunning(true);
-    setLoading(true);
-    
-    const data = await api(`projects/${projectId}/run-pipeline`, { method: 'POST' });
-    
-    if (data.success) {
-      toast.success('Pipeline started! This may take several minutes...');
-      
-      // Poll for status updates
-      const pollInterval = setInterval(async () => {
-        const updated = await api(`projects/${projectId}`);
-        if (updated.success) {
-          setSelectedProject(updated.project);
-          
-          if (updated.project.pipeline_status === 'completed') {
-            clearInterval(pollInterval);
-            setPipelineRunning(false);
-            setLoading(false);
-            toast.success('Pipeline completed successfully!');
-            fetchProjects();
-          } else if (updated.project.pipeline_status === 'failed') {
-            clearInterval(pollInterval);
-            setPipelineRunning(false);
-            setLoading(false);
-            toast.error(`Pipeline failed: ${updated.project.pipeline_error || 'Unknown error'}`);
-            fetchProjects();
-          }
-        }
-      }, 3000);
-      
-      // Timeout after 10 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval);
-        setPipelineRunning(false);
-        setLoading(false);
-      }, 600000);
-    } else {
-      setPipelineRunning(false);
-      setLoading(false);
-      
-      if (data.validations) {
-        setValidation(data);
-        toast.error(data.message || 'Validation failed. Please fix the issues.');
       }
     }
   };
@@ -933,27 +869,6 @@ function DashboardView({ analytics, analyticsTimeframe, setAnalyticsTimeframe, p
 
 // ==================== PROJECTS VIEW ====================
 function ProjectsView({ projects, onCreateNew, onSelectProject, calculateProgress, getCurrentStep }) {
-  const [filter, setFilter] = useState('all');
-  
-  const filteredProjects = projects.filter(p => {
-    if (filter === 'all') return true;
-    if (filter === 'draft') return p.status === 'draft' || !p.status;
-    if (filter === 'running') return p.pipeline_status === 'running';
-    if (filter === 'published') return p.status === 'published';
-    if (filter === 'scheduled') return p.status === 'scheduled';
-    if (filter === 'failed') return p.pipeline_status === 'failed' || p.status === 'failed';
-    return true;
-  });
-  
-  const counts = {
-    all: projects.length,
-    draft: projects.filter(p => p.status === 'draft' || !p.status).length,
-    running: projects.filter(p => p.pipeline_status === 'running').length,
-    published: projects.filter(p => p.status === 'published').length,
-    scheduled: projects.filter(p => p.status === 'scheduled').length,
-    failed: projects.filter(p => p.pipeline_status === 'failed' || p.status === 'failed').length
-  };
-  
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -969,41 +884,12 @@ function ProjectsView({ projects, onCreateNew, onSelectProject, calculateProgres
           New Project
         </Button>
       </div>
-      
-      {/* FILTERS */}
-      <div className="flex gap-2 overflow-x-auto pb-2">
-        {[
-          { key: 'all', label: 'All Projects', icon: Video },
-          { key: 'draft', label: 'Draft', icon: Target },
-          { key: 'running', label: 'Running', icon: Loader2 },
-          { key: 'published', label: 'Published', icon: CheckCircle2 },
-          { key: 'scheduled', label: 'Scheduled', icon: Calendar },
-          { key: 'failed', label: 'Failed', icon: AlertCircle }
-        ].map(({ key, label, icon: Icon }) => (
-          <Button
-            key={key}
-            onClick={() => setFilter(key)}
-            variant={filter === key ? 'default' : 'outline'}
-            size="sm"
-            className={filter === key ? 'bg-violet-600 hover:bg-violet-700' : 'border-slate-700'}
-          >
-            <Icon className={`h-4 w-4 mr-2 ${key === 'running' && filter === key ? 'animate-spin' : ''}`} />
-            {label}
-            <Badge variant="secondary" className="ml-2">{counts[key]}</Badge>
-          </Button>
-        ))}
-      </div>
 
       {/* Projects Grid */}
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {filteredProjects.map(project => {
+        {projects.map(project => {
           const progress = calculateProgress(project);
           const currentStep = getCurrentStep(project);
-          const statusColor = 
-            project.pipeline_status === 'running' ? 'bg-blue-600' :
-            project.status === 'published' ? 'bg-green-600' :
-            project.status === 'scheduled' ? 'bg-yellow-600' :
-            project.pipeline_status === 'failed' ? 'bg-red-600' : 'bg-slate-600';
 
           return (
             <Card
@@ -1020,27 +906,14 @@ function ProjectsView({ projects, onCreateNew, onSelectProject, calculateProgres
                     <CardDescription className="mt-1">
                       {project.aspect_ratio} • {project.duration_seconds}s • {project.language}
                     </CardDescription>
-                    <div className="flex items-center gap-2 mt-2">
-                      <div className="flex items-center gap-1 text-xs text-slate-500">
-                        <Clock className="h-3 w-3" />
-                        {new Date(project.created_at).toLocaleDateString()}
-                      </div>
-                      {project.publishing_mode && (
-                        <Badge variant="outline" className="text-xs border-slate-600">
-                          {project.publishing_mode}
-                        </Badge>
-                      )}
+                    <div className="flex items-center gap-2 mt-2 text-xs text-slate-500">
+                      <Clock className="h-3 w-3" />
+                      {new Date(project.created_at).toLocaleDateString()}
                     </div>
                   </div>
-                  <div className="flex flex-col gap-1">
-                    <div className={`h-2 w-2 rounded-full ${statusColor} ${project.pipeline_status === 'running' ? 'animate-pulse' : ''}`} />
-                    <Badge variant={currentStep.status === 'completed' ? 'default' : currentStep.status === 'failed' ? 'destructive' : 'secondary'} className="ml-2 text-xs">
-                      {project.pipeline_status === 'running' ? 'Running' : 
-                       project.status === 'published' ? 'Published' :
-                       project.status === 'scheduled' ? 'Scheduled' :
-                       project.pipeline_status === 'failed' ? 'Failed' : 'Draft'}
-                    </Badge>
-                  </div>
+                  <Badge variant={currentStep.status === 'completed' ? 'default' : currentStep.status === 'failed' ? 'destructive' : 'secondary'} className="ml-2">
+                    {currentStep.status}
+                  </Badge>
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -1052,7 +925,7 @@ function ProjectsView({ projects, onCreateNew, onSelectProject, calculateProgres
                   <Progress value={progress.percentage} className="h-2" />
                 </div>
                 <div className="text-xs text-slate-400">
-                  {project.pipeline_status === 'running' ? 'Running...' : `Current: ${currentStep.name}`}
+                  Current: {currentStep.name}
                 </div>
               </CardContent>
             </Card>
@@ -1060,19 +933,15 @@ function ProjectsView({ projects, onCreateNew, onSelectProject, calculateProgres
         })}
       </div>
 
-      {filteredProjects.length === 0 && (
+      {projects.length === 0 && (
         <Card className="bg-slate-800/50 border-slate-700">
           <CardContent className="py-12 text-center">
             <Video className="h-12 w-12 mx-auto mb-4 text-slate-600" />
-            <p className="text-slate-400 mb-4">
-              {filter === 'all' ? 'No projects yet. Create your first project!' : `No ${filter} projects found.`}
-            </p>
-            {filter === 'all' && (
-              <Button onClick={onCreateNew} className="bg-gradient-to-r from-violet-600 to-indigo-600">
-                <Plus className="h-4 w-4 mr-2" />
-                Create First Project
-              </Button>
-            )}
+            <p className="text-slate-400 mb-4">No projects yet. Create your first project!</p>
+            <Button onClick={onCreateNew} className="bg-gradient-to-r from-violet-600 to-indigo-600">
+              <Plus className="h-4 w-4 mr-2" />
+              Create First Project
+            </Button>
           </CardContent>
         </Card>
       )}
