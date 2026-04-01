@@ -9,6 +9,8 @@ import * as heygenService from '@/lib/services/heygen.service';
 import * as youtubeService from '@/lib/services/youtube.service';
 import * as integrationService from '@/lib/services/integration.service';
 import * as pipelineService from '@/lib/services/pipeline.service';
+import * as validationEngine from '@/lib/services/validation-engine.service';
+import * as pipelineExecutor from '@/lib/services/pipeline-executor.service';
 
 function json(data, status = 200) {
   return NextResponse.json(data, { status });
@@ -151,6 +153,153 @@ async function handleDeleteProject(id, userId) {
   const db = await getDb();
   await db.collection('projects').deleteOne({ _id: id, user_id: userId });
   return json({ success: true });
+}
+
+// ==================== VALIDATION ENGINE ====================
+async function handleValidateProject(id, userId) {
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    
+    // Get integrations
+    const integrations = await integrationService.getAllIntegrations(userId);
+    
+    // Get voices and avatars if HeyGen connected
+    let voices = [];
+    let avatars = [];
+    
+    const heygenInt = integrations.find(i => i.provider === 'heygen' && i.is_connected);
+    if (heygenInt) {
+      try {
+        voices = await heygenService.listVoices(heygenInt.config_json.api_key);
+        avatars = await heygenService.listAvatars(heygenInt.config_json.api_key);
+      } catch (e) {
+        console.error('[Validation] Failed to fetch HeyGen resources:', e);
+      }
+    }
+    
+    const validations = await validationEngine.validateProjectReadiness(project, integrations, voices, avatars);
+    const summary = validationEngine.getValidationSummary(validations);
+    
+    return json({ 
+      success: true, 
+      validations,
+      summary
+    });
+  } catch (e) {
+    console.error('[Validation] Error:', e);
+    return error(e.message, 'VALIDATION_ERROR', 500);
+  }
+}
+
+// ==================== ONE-CLICK PIPELINE ====================
+async function handleRunFullPipeline(id, userId) {
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    
+    // Check if already running
+    if (project.pipeline_status === 'running') {
+      return error('Pipeline already running', 'ALREADY_RUNNING', 400);
+    }
+    
+    // Get integrations
+    const integrations = await integrationService.getAllIntegrations(userId);
+    
+    // Validate before starting
+    const voices = [];
+    const avatars = [];
+    
+    const heygenInt = integrations.find(i => i.provider === 'heygen' && i.is_connected);
+    if (heygenInt) {
+      try {
+        const v = await heygenService.listVoices(heygenInt.config_json.api_key);
+        const a = await heygenService.listAvatars(heygenInt.config_json.api_key);
+        voices.push(...v);
+        avatars.push(...a);
+      } catch (e) {
+        return error(`HeyGen validation failed: ${e.message}`, 'HEYGEN_ERROR', 400);
+      }
+    }
+    
+    const validations = await validationEngine.validateProjectReadiness(project, integrations, voices, avatars);
+    
+    if (!validations.ready) {
+      return json({
+        success: false,
+        error_code: 'VALIDATION_FAILED',
+        message: 'Project validation failed. Fix issues before running pipeline.',
+        validations,
+        summary: validationEngine.getValidationSummary(validations)
+      }, 400);
+    }
+    
+    // Mark as running
+    await db.collection('projects').updateOne(
+      { _id: id },
+      { 
+        $set: { 
+          pipeline_status: 'running',
+          pipeline_started_at: new Date(),
+          updated_at: new Date()
+        } 
+      }
+    );
+    
+    // Execute pipeline asynchronously
+    console.log(`[Pipeline] Starting full pipeline for project ${id}`);
+    
+    pipelineExecutor.executeFullPipeline(project, userId, integrations)
+      .then(async (result) => {
+        console.log(`[Pipeline] Pipeline finished for ${id}:`, result.status);
+        
+        // Update project with results
+        await db.collection('projects').updateOne(
+          { _id: id },
+          {
+            $set: {
+              ...result.project,
+              pipeline_status: result.status,
+              pipeline_completed_at: new Date(),
+              pipeline_results: result.results,
+              updated_at: new Date(),
+              status: result.status === 'completed' ? 
+                (result.project.publishing_mode === 'instant' ? 'published' : 
+                 result.project.publishing_mode === 'scheduled' ? 'scheduled' : 'draft') : 
+                'failed'
+            }
+          }
+        );
+      })
+      .catch(async (error) => {
+        console.error(`[Pipeline] Pipeline error for ${id}:`, error);
+        
+        await db.collection('projects').updateOne(
+          { _id: id },
+          {
+            $set: {
+              pipeline_status: 'failed',
+              pipeline_error: error.message,
+              pipeline_completed_at: new Date(),
+              updated_at: new Date(),
+              status: 'failed'
+            }
+          }
+        );
+      });
+    
+    return json({
+      success: true,
+      message: 'Pipeline started successfully',
+      pipeline_status: 'running'
+    });
+    
+  } catch (e) {
+    console.error('[Pipeline] Start error:', e);
+    return error(e.message, 'PIPELINE_START_ERROR', 500);
+  }
 }
 
 //  ==================== PIPELINE STEPS WITH CACHING ====================
