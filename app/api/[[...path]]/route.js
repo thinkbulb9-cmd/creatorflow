@@ -486,18 +486,70 @@ async function handleSelectThumbnail(id, userId, req) {
     const body = await req.json();
     const { selected_thumbnail_url } = body;
     
+    if (!selected_thumbnail_url) {
+      return error('Thumbnail URL is required', 'MISSING_THUMBNAIL', 400);
+    }
+    
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
     
-    const thumbnailData = { ...project.thumbnail_data, selected: selected_thumbnail_url };
+    // Validate that thumbnail was actually generated
+    if (!project.thumbnail_data || !project.thumbnail_data.images) {
+      return error('Thumbnails must be generated before selection', 'NO_THUMBNAILS', 400);
+    }
+    
+    // Validate selected URL is one of the generated thumbnails
+    const thumbnailUrls = Object.values(project.thumbnail_data.images);
+    if (!thumbnailUrls.includes(selected_thumbnail_url)) {
+      return error('Invalid thumbnail URL - not in generated set', 'INVALID_THUMBNAIL', 400);
+    }
+    
+    console.log('[Thumbnail Selection] User selected:', selected_thumbnail_url);
+    
+    // Update thumbnail data with selection
+    const thumbnailData = { 
+      ...project.thumbnail_data, 
+      selected: selected_thumbnail_url,
+      selected_at: new Date().toISOString()
+    };
+    
+    // CRITICAL: Mark thumbnail step as COMPLETED in pipeline state
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    const updatedPipelineState = pipelineService.markStepCompleted(pipelineState, 'thumbnail');
+    
+    console.log('[Thumbnail Selection] Marking thumbnail step as COMPLETED');
+    console.log('[Thumbnail Selection] Next step (metadata) should now be unlocked');
+    
+    // Update project with both thumbnail data AND completed pipeline state
     await db.collection('projects').updateOne(
       { _id: id },
-      { $set: { thumbnail_data: thumbnailData, updated_at: new Date() } }
+      { 
+        $set: { 
+          thumbnail_data: thumbnailData,
+          pipeline_state: updatedPipelineState,
+          updated_at: new Date() 
+        } 
+      }
     );
     
-    return json({ success: true, thumbnail_data: thumbnailData });
+    // Get updated progress
+    const progress = pipelineService.calculateProgress(updatedPipelineState);
+    const currentStep = pipelineService.getCurrentStepInfo(updatedPipelineState);
+    
+    console.log('[Thumbnail Selection] Pipeline progress:', progress);
+    console.log('[Thumbnail Selection] Current active step:', currentStep.name);
+    
+    return json({ 
+      success: true, 
+      thumbnail_data: thumbnailData,
+      pipeline_state: updatedPipelineState,
+      progress,
+      current_step: currentStep,
+      message: 'Thumbnail selected and pipeline advanced to next step'
+    });
   } catch (e) {
+    console.error('[Thumbnail Selection] Error:', e);
     return error(e.message, 'SELECT_THUMBNAIL_ERROR', 500);
   }
 }

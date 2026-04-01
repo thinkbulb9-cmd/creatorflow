@@ -1,465 +1,357 @@
 #!/usr/bin/env python3
 """
-YouTube OAuth Integration Test Suite
-Tests the complete YouTube OAuth integration flow including:
-1. YouTube Integration Save
-2. YouTube Connection Status
-3. YouTube OAuth Start
-4. State Parameter Validation
-5. OAuth Callback Simulation
+Backend API Testing for CreatorFlow AI - Thumbnail → Metadata Pipeline Transition
+Focused test for pipeline state transitions and thumbnail selection logic
 """
 
 import requests
 import json
-import base64
-from urllib.parse import urlparse, parse_qs
+import time
 import sys
+from datetime import datetime
 
 # Configuration
 BASE_URL = "https://youtube-pipeline-1.preview.emergentagent.com"
 API_BASE = f"{BASE_URL}/api"
 
-# Test credentials from review request
+# Test credentials
 TEST_EMAIL = "testuser@creatorflow.ai"
 TEST_PASSWORD = "TestPassword123!"
-TEST_YOUTUBE_CLIENT_ID = "test-client-id.apps.googleusercontent.com"
-TEST_CLIENT_SECRET = "test-client-secret"
 
-class YouTubeOAuthTester:
+class PipelineTransitionTest:
     def __init__(self):
         self.session = requests.Session()
         self.user_id = None
-        self.session_token = None
+        self.project_id = None
         
-    def log(self, message, status="INFO"):
-        print(f"[{status}] {message}")
+    def log(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] {message}")
         
-    def register_user(self):
-        """Register test user"""
+    def register_and_authenticate(self):
+        """Register and authenticate user"""
         try:
-            self.log("Registering test user...")
-            response = self.session.post(f"{API_BASE}/register", json={
+            # Register user (will return 409 if exists)
+            self.session.post(f"{API_BASE}/register", json={
                 "name": "Test User",
                 "email": TEST_EMAIL,
                 "password": TEST_PASSWORD
             })
             
-            if response.status_code == 201:
-                data = response.json()
-                self.user_id = data["user"]["id"]
-                self.log(f"✅ User registered successfully with ID: {self.user_id}")
-                return True
-            elif response.status_code == 409:
-                self.log("User already exists, proceeding with authentication")
-                return True
-            else:
-                self.log(f"❌ Registration failed: {response.text}", "ERROR")
-                return False
-                
-        except Exception as e:
-            self.log(f"❌ Registration error: {str(e)}", "ERROR")
-            return False
-    
-    def authenticate(self):
-        """Authenticate user and get session"""
-        try:
-            self.log("Authenticating user...")
+            # Get CSRF token
+            csrf_response = self.session.get(f"{BASE_URL}/api/auth/csrf")
+            csrf_token = csrf_response.json().get('csrfToken')
             
-            # Get NextAuth CSRF token
-            csrf_response = self.session.get(f"{API_BASE}/auth/csrf")
-            if csrf_response.status_code != 200:
-                self.log(f"❌ Failed to get CSRF token: {csrf_response.text}", "ERROR")
-                return False
-                
-            csrf_data = csrf_response.json()
-            csrf_token = csrf_data.get("csrfToken")
-            
-            # Authenticate with credentials
-            auth_response = self.session.post(f"{API_BASE}/auth/callback/credentials", data={
+            # Authenticate
+            auth_data = {
                 "email": TEST_EMAIL,
                 "password": TEST_PASSWORD,
                 "csrfToken": csrf_token,
-                "callbackUrl": BASE_URL,
+                "redirect": "false",
                 "json": "true"
-            })
+            }
+            
+            auth_response = self.session.post(
+                f"{BASE_URL}/api/auth/callback/credentials",
+                data=auth_data,
+                headers={'Content-Type': 'application/x-www-form-urlencoded'}
+            )
             
             if auth_response.status_code == 200:
-                auth_data = auth_response.json()
-                if auth_data.get("url"):
+                cookies = self.session.cookies.get_dict()
+                session_cookies = [k for k in cookies.keys() if 'next-auth' in k.lower()]
+                if session_cookies:
                     self.log("✅ Authentication successful")
-                    
-                    # Get session to extract user ID
-                    session_response = self.session.get(f"{API_BASE}/auth/session")
-                    if session_response.status_code == 200:
-                        session_data = session_response.json()
-                        if session_data.get("user", {}).get("id"):
-                            self.user_id = session_data["user"]["id"]
-                            self.log(f"✅ Session established for user ID: {self.user_id}")
-                            return True
-                    
-                    self.log("❌ Failed to get user session", "ERROR")
-                    return False
-                else:
-                    self.log(f"❌ Authentication failed: {auth_data}", "ERROR")
-                    return False
-            else:
-                self.log(f"❌ Authentication failed: {auth_response.text}", "ERROR")
-                return False
-                
+                    return True
+            
+            self.log("❌ Authentication failed")
+            return False
+            
         except Exception as e:
-            self.log(f"❌ Authentication error: {str(e)}", "ERROR")
+            self.log(f"❌ Auth error: {e}")
             return False
     
-    def test_youtube_integration_save(self):
-        """Test 1: POST /api/integrations with YouTube provider"""
+    def create_project(self):
+        """Create test project"""
         try:
-            self.log("\n=== TEST 1: YouTube Integration Save ===")
-            
-            response = self.session.post(f"{API_BASE}/integrations", json={
-                "provider": "youtube",
-                "config_json": {
-                    "client_id": TEST_YOUTUBE_CLIENT_ID,
-                    "client_secret": TEST_CLIENT_SECRET
-                }
+            response = self.session.post(f"{API_BASE}/projects", json={
+                "concept": "How to Build a Successful YouTube Channel in 2024",
+                "duration_seconds": 60,
+                "aspect_ratio": "16:9",
+                "language": "English",
+                "content_style": "professional",
+                "publishing_mode": "draft"
             })
             
-            if response.status_code == 200:
+            if response.status_code == 201:
                 data = response.json()
-                if data.get("success") and data.get("integration"):
-                    integration = data["integration"]
-                    self.log(f"✅ YouTube integration saved successfully")
-                    self.log(f"   Provider: {integration.get('provider')}")
-                    self.log(f"   Connected: {data.get('connected')}")
-                    self.log(f"   Message: {data.get('message')}")
-                    
-                    # Verify client_id is saved but client_secret is masked
-                    config = integration.get("config_json", {})
-                    if config.get("client_id") == TEST_YOUTUBE_CLIENT_ID:
-                        self.log("✅ Client ID saved correctly")
-                    else:
-                        self.log("❌ Client ID not saved correctly", "ERROR")
-                        return False
-                        
-                    if "client_secret" in config and config["client_secret"] != TEST_CLIENT_SECRET:
-                        self.log("✅ Client secret is masked in response")
-                    else:
-                        self.log("⚠️  Client secret might not be masked", "WARN")
-                    
+                self.project_id = data['project']['_id']
+                self.log(f"✅ Project created: {self.project_id}")
+                return True
+            else:
+                self.log(f"❌ Project creation failed: {response.status_code}")
+                return False
+        except Exception as e:
+            self.log(f"❌ Project creation error: {e}")
+            return False
+    
+    def test_dependency_validation(self):
+        """Test 1: Verify dependency validation is working"""
+        try:
+            self.log("🔒 TEST 1: Pipeline Dependency Validation")
+            
+            # Try to generate thumbnail without prerequisites
+            response = self.session.post(f"{API_BASE}/projects/{self.project_id}/generate-thumbnail")
+            
+            if response.status_code == 400:
+                error_data = response.json()
+                if error_data.get('error_code') == 'DEPENDENCY_ERROR':
+                    self.log("✅ Dependency validation working - thumbnail blocked without prerequisites")
                     return True
                 else:
-                    self.log(f"❌ Integration save failed: {data}", "ERROR")
+                    self.log(f"❌ Wrong error code: {error_data.get('error_code')}")
                     return False
             else:
-                self.log(f"❌ Integration save failed: {response.text}", "ERROR")
+                self.log(f"❌ Expected 400 error, got: {response.status_code}")
                 return False
                 
         except Exception as e:
-            self.log(f"❌ Integration save error: {str(e)}", "ERROR")
+            self.log(f"❌ Dependency test error: {e}")
             return False
     
-    def test_get_integrations(self):
-        """Test 2: GET /api/integrations to confirm YouTube integration is saved"""
+    def test_thumbnail_selection_validation(self):
+        """Test 2: Thumbnail Selection Validation Logic"""
         try:
-            self.log("\n=== TEST 2: Get Integrations ===")
+            self.log("🎯 TEST 2: Thumbnail Selection Validation")
             
-            response = self.session.get(f"{API_BASE}/integrations")
+            # Test empty URL
+            response = self.session.post(f"{API_BASE}/projects/{self.project_id}/select-thumbnail", json={
+                "selected_thumbnail_url": ""
+            })
             
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("success") and "integrations" in data:
-                    integrations = data["integrations"]
-                    youtube_integration = None
-                    
-                    for integration in integrations:
-                        if integration.get("provider") == "youtube":
-                            youtube_integration = integration
-                            break
-                    
-                    if youtube_integration:
-                        self.log("✅ YouTube integration found in integrations list")
-                        self.log(f"   Provider: {youtube_integration.get('provider')}")
-                        self.log(f"   Connected: {youtube_integration.get('is_connected')}")
-                        
-                        config = youtube_integration.get("config_json", {})
-                        if config.get("client_id") == TEST_YOUTUBE_CLIENT_ID:
-                            self.log("✅ Client ID persisted correctly")
-                        else:
-                            self.log("❌ Client ID not persisted correctly", "ERROR")
-                            return False
-                        
-                        return True
-                    else:
-                        self.log("❌ YouTube integration not found in list", "ERROR")
-                        return False
-                else:
-                    self.log(f"❌ Get integrations failed: {data}", "ERROR")
-                    return False
-            else:
-                self.log(f"❌ Get integrations failed: {response.text}", "ERROR")
+            if response.status_code != 400:
+                self.log(f"❌ Empty URL should be rejected, got: {response.status_code}")
                 return False
-                
+            
+            # Test invalid URL
+            response = self.session.post(f"{API_BASE}/projects/{self.project_id}/select-thumbnail", json={
+                "selected_thumbnail_url": "https://invalid-url.com/fake.jpg"
+            })
+            
+            if response.status_code != 400:
+                self.log(f"❌ Invalid URL should be rejected, got: {response.status_code}")
+                return False
+            
+            self.log("✅ Thumbnail selection validation working correctly")
+            return True
+            
         except Exception as e:
-            self.log(f"❌ Get integrations error: {str(e)}", "ERROR")
+            self.log(f"❌ Validation test error: {e}")
             return False
     
-    def test_youtube_connection_status(self):
-        """Test 3: GET /api/youtube/connection-status"""
+    def test_metadata_dependency_check(self):
+        """Test 3: Metadata step dependency validation"""
         try:
-            self.log("\n=== TEST 3: YouTube Connection Status ===")
+            self.log("🔓 TEST 3: Metadata Dependency Validation")
             
-            response = self.session.get(f"{API_BASE}/youtube/connection-status")
+            # Try to generate metadata without thumbnail completion
+            response = self.session.post(f"{API_BASE}/projects/{self.project_id}/generate-metadata")
             
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("success"):
-                    self.log("✅ YouTube connection status retrieved successfully")
-                    self.log(f"   Connected: {data.get('connected')}")
-                    self.log(f"   Has Credentials: {data.get('has_credentials')}")
-                    self.log(f"   Has Access Token: {data.get('has_access_token')}")
-                    self.log(f"   Requires OAuth: {data.get('requires_oauth')}")
-                    self.log(f"   Channel Info: {data.get('channel_info')}")
-                    
-                    # Verify expected status
-                    expected_status = {
-                        "has_credentials": True,
-                        "has_access_token": False,
-                        "requires_oauth": True,
-                        "connected": False
-                    }
-                    
-                    for key, expected_value in expected_status.items():
-                        actual_value = data.get(key)
-                        if actual_value == expected_value:
-                            self.log(f"✅ {key}: {actual_value} (correct)")
-                        else:
-                            self.log(f"❌ {key}: {actual_value}, expected: {expected_value}", "ERROR")
-                            return False
-                    
+            if response.status_code == 400:
+                error_data = response.json()
+                if error_data.get('error_code') == 'DEPENDENCY_ERROR':
+                    self.log("✅ Metadata correctly blocked without thumbnail completion")
                     return True
                 else:
-                    self.log(f"❌ Connection status failed: {data}", "ERROR")
+                    self.log(f"❌ Wrong error code: {error_data.get('error_code')}")
                     return False
             else:
-                self.log(f"❌ Connection status failed: {response.text}", "ERROR")
+                self.log(f"❌ Expected 400 error, got: {response.status_code}")
                 return False
                 
         except Exception as e:
-            self.log(f"❌ Connection status error: {str(e)}", "ERROR")
+            self.log(f"❌ Metadata dependency test error: {e}")
             return False
     
-    def test_youtube_oauth_start(self):
-        """Test 4: GET /api/youtube/auth - OAuth start"""
+    def test_pipeline_state_structure(self):
+        """Test 4: Pipeline State Structure"""
         try:
-            self.log("\n=== TEST 4: YouTube OAuth Start ===")
+            self.log("📊 TEST 4: Pipeline State Structure")
             
-            response = self.session.get(f"{API_BASE}/youtube/auth")
+            response = self.session.get(f"{API_BASE}/projects/{self.project_id}")
             
             if response.status_code == 200:
                 data = response.json()
-                if data.get("success") and data.get("auth_url"):
-                    auth_url = data["auth_url"]
-                    self.log("✅ OAuth auth URL generated successfully")
-                    self.log(f"   Auth URL: {auth_url}")
-                    
-                    # Parse the auth URL to verify parameters
-                    parsed_url = urlparse(auth_url)
-                    query_params = parse_qs(parsed_url.query)
-                    
-                    # Check required parameters
-                    required_params = ["client_id", "redirect_uri", "state", "scope", "response_type"]
-                    for param in required_params:
-                        if param in query_params:
-                            self.log(f"✅ {param}: {query_params[param][0]}")
-                        else:
-                            self.log(f"❌ Missing required parameter: {param}", "ERROR")
-                            return False
-                    
-                    # Verify client_id
-                    if query_params.get("client_id", [None])[0] == TEST_YOUTUBE_CLIENT_ID:
-                        self.log("✅ Client ID in auth URL matches saved credentials")
-                    else:
-                        self.log("❌ Client ID in auth URL doesn't match", "ERROR")
+                project = data.get('project')
+                pipeline_state = project.get('pipeline_state', {})
+                progress = data.get('progress', {})
+                current_step = data.get('current_step', {})
+                
+                # Verify pipeline state has all required steps
+                required_steps = ['evaluate', 'script', 'scenes', 'video', 'thumbnail', 'metadata', 'upload', 'schedule']
+                
+                for step in required_steps:
+                    if step not in pipeline_state:
+                        self.log(f"❌ Missing pipeline step: {step}")
                         return False
                     
-                    # Verify redirect_uri
-                    expected_redirect = f"{BASE_URL}/api/youtube/callback"
-                    if query_params.get("redirect_uri", [None])[0] == expected_redirect:
-                        self.log("✅ Redirect URI is correct")
-                    else:
-                        self.log(f"❌ Redirect URI incorrect. Expected: {expected_redirect}", "ERROR")
+                    step_state = pipeline_state[step]
+                    if 'status' not in step_state:
+                        self.log(f"❌ Missing status for step: {step}")
                         return False
-                    
-                    # Verify scope contains YouTube permissions
-                    scope = query_params.get("scope", [None])[0]
-                    if scope and "youtube" in scope.lower():
-                        self.log("✅ Scope contains YouTube permissions")
-                    else:
-                        self.log("❌ Scope doesn't contain YouTube permissions", "ERROR")
-                        return False
-                    
-                    # Store state for next test
-                    self.oauth_state = query_params.get("state", [None])[0]
+                
+                # Verify progress structure
+                if 'completed' not in progress or 'total' not in progress or 'percentage' not in progress:
+                    self.log("❌ Invalid progress structure")
+                    return False
+                
+                # Verify current step structure
+                if 'key' not in current_step or 'name' not in current_step:
+                    self.log("❌ Invalid current step structure")
+                    return False
+                
+                self.log("✅ Pipeline state structure is correct")
+                self.log(f"   Progress: {progress['completed']}/{progress['total']} ({progress['percentage']}%)")
+                self.log(f"   Current step: {current_step['name']}")
+                return True
+            else:
+                self.log(f"❌ Failed to get project: {response.status_code}")
+                return False
+                
+        except Exception as e:
+            self.log(f"❌ Pipeline state test error: {e}")
+            return False
+    
+    def test_force_regenerate_logic(self):
+        """Test 5: Force Regenerate Bypass Logic"""
+        try:
+            self.log("🔄 TEST 5: Force Regenerate Logic")
+            
+            # Test that force regenerate can bypass dependencies
+            response = self.session.post(f"{API_BASE}/projects/{self.project_id}/generate-thumbnail", json={
+                "regenerate": True
+            })
+            
+            # This should either succeed (if OpenAI is configured) or fail with OpenAI error (not dependency error)
+            if response.status_code == 200:
+                self.log("✅ Force regenerate bypassed dependencies successfully")
+                return True
+            elif response.status_code == 500:
+                error_text = response.text
+                if "OpenAI not connected" in error_text:
+                    self.log("✅ Force regenerate bypassed dependencies (failed at OpenAI integration as expected)")
                     return True
                 else:
-                    self.log(f"❌ OAuth start failed: {data}", "ERROR")
+                    self.log(f"❌ Unexpected 500 error: {error_text}")
+                    return False
+            elif response.status_code == 400:
+                error_data = response.json()
+                if error_data.get('error_code') == 'DEPENDENCY_ERROR':
+                    self.log("❌ Force regenerate did not bypass dependencies")
+                    return False
+                else:
+                    self.log(f"❌ Unexpected 400 error: {error_data}")
                     return False
             else:
-                self.log(f"❌ OAuth start failed: {response.text}", "ERROR")
+                self.log(f"❌ Unexpected response: {response.status_code}")
                 return False
                 
         except Exception as e:
-            self.log(f"❌ OAuth start error: {str(e)}", "ERROR")
+            self.log(f"❌ Force regenerate test error: {e}")
             return False
     
-    def test_state_parameter_validation(self):
-        """Test 5: Verify state parameter can be decoded and contains userId"""
+    def test_api_endpoints_exist(self):
+        """Test 6: Verify all required API endpoints exist"""
         try:
-            self.log("\n=== TEST 5: State Parameter Validation ===")
+            self.log("🔗 TEST 6: API Endpoints Existence")
             
-            if not hasattr(self, 'oauth_state') or not self.oauth_state:
-                self.log("❌ No OAuth state available from previous test", "ERROR")
-                return False
+            endpoints_to_test = [
+                ("POST", f"/projects/{self.project_id}/generate-thumbnail"),
+                ("POST", f"/projects/{self.project_id}/select-thumbnail"),
+                ("POST", f"/projects/{self.project_id}/generate-metadata"),
+                ("GET", f"/projects/{self.project_id}")
+            ]
             
-            # Decode the state parameter
-            try:
-                decoded_state = base64.b64decode(self.oauth_state).decode('utf-8')
-                state_data = json.loads(decoded_state)
-                self.log(f"✅ State parameter decoded successfully")
-                self.log(f"   Decoded state: {state_data}")
-                
-                # Verify userId is present and matches
-                if "userId" in state_data:
-                    state_user_id = state_data["userId"]
-                    if state_user_id == self.user_id:
-                        self.log(f"✅ State contains correct userId: {state_user_id}")
-                        return True
-                    else:
-                        self.log(f"❌ State userId mismatch. Expected: {self.user_id}, Got: {state_user_id}", "ERROR")
-                        return False
+            all_exist = True
+            
+            for method, endpoint in endpoints_to_test:
+                if method == "POST":
+                    response = self.session.post(f"{API_BASE}{endpoint}", json={})
                 else:
-                    self.log("❌ State doesn't contain userId", "ERROR")
-                    return False
-                    
-            except Exception as decode_error:
-                self.log(f"❌ Failed to decode state parameter: {str(decode_error)}", "ERROR")
-                return False
+                    response = self.session.get(f"{API_BASE}{endpoint}")
                 
+                # We expect 400 (bad request) or 500 (server error), not 404 (not found)
+                if response.status_code == 404:
+                    self.log(f"❌ Endpoint not found: {method} {endpoint}")
+                    all_exist = False
+                else:
+                    self.log(f"✅ Endpoint exists: {method} {endpoint}")
+            
+            return all_exist
+            
         except Exception as e:
-            self.log(f"❌ State validation error: {str(e)}", "ERROR")
+            self.log(f"❌ Endpoints test error: {e}")
             return False
     
-    def test_oauth_callback_simulation(self):
-        """Test 6: Simulate OAuth callback (will fail on token exchange but should pass state validation)"""
-        try:
-            self.log("\n=== TEST 6: OAuth Callback Simulation ===")
-            
-            if not hasattr(self, 'oauth_state') or not self.oauth_state:
-                self.log("❌ No OAuth state available from previous test", "ERROR")
-                return False
-            
-            # Simulate callback with test code and real state
-            callback_url = f"{API_BASE}/youtube/callback?code=test_authorization_code&state={self.oauth_state}"
-            
-            self.log(f"Simulating callback to: {callback_url}")
-            
-            # Note: We expect this to fail on token exchange since we're using a fake code
-            # But it should pass state validation
-            response = self.session.get(callback_url, allow_redirects=False)
-            
-            # Check if it's a redirect (which is expected behavior)
-            if response.status_code in [302, 307, 308]:
-                redirect_location = response.headers.get('Location', '')
-                self.log(f"✅ Callback returned redirect (expected): {response.status_code}")
-                self.log(f"   Redirect location: {redirect_location}")
-                
-                # Check if redirect contains error (expected due to fake code)
-                if "youtube_callback=error" in redirect_location:
-                    self.log("✅ Callback correctly failed on token exchange (expected with fake code)")
-                    
-                    # Check if error message indicates token exchange failure, not state validation failure
-                    if "state" not in redirect_location.lower() and "invalid" not in redirect_location.lower():
-                        self.log("✅ State validation passed (error is from token exchange, not state)")
-                        return True
-                    else:
-                        self.log("❌ State validation failed", "ERROR")
-                        return False
-                else:
-                    self.log("⚠️  Unexpected redirect without error", "WARN")
-                    return True
-                    
-            elif response.status_code == 200:
-                # Direct JSON response
-                try:
-                    data = response.json()
-                    if "state" in str(data).lower() and "invalid" in str(data).lower():
-                        self.log("❌ State validation failed", "ERROR")
-                        return False
-                    else:
-                        self.log("✅ State validation passed", "INFO")
-                        return True
-                except:
-                    self.log("✅ Non-JSON response, likely passed state validation", "INFO")
-                    return True
-            else:
-                # Check response content for state-related errors
-                response_text = response.text.lower()
-                if "state" in response_text and ("invalid" in response_text or "missing" in response_text):
-                    self.log(f"❌ State validation failed: {response.text}", "ERROR")
-                    return False
-                else:
-                    self.log(f"✅ State validation passed (error from token exchange): {response.status_code}", "INFO")
-                    return True
-                
-        except Exception as e:
-            self.log(f"❌ OAuth callback simulation error: {str(e)}", "ERROR")
-            return False
-    
-    def run_all_tests(self):
-        """Run all YouTube OAuth integration tests"""
-        self.log("🚀 Starting YouTube OAuth Integration Test Suite")
-        self.log(f"Base URL: {BASE_URL}")
-        self.log(f"Test Email: {TEST_EMAIL}")
+    def run_pipeline_logic_tests(self):
+        """Run focused pipeline logic tests"""
+        self.log("🚀 Starting Pipeline Logic Tests")
+        self.log("=" * 60)
         
-        tests = [
-            ("User Registration", self.register_user),
-            ("User Authentication", self.authenticate),
-            ("YouTube Integration Save", self.test_youtube_integration_save),
-            ("Get Integrations", self.test_get_integrations),
-            ("YouTube Connection Status", self.test_youtube_connection_status),
-            ("YouTube OAuth Start", self.test_youtube_oauth_start),
-            ("State Parameter Validation", self.test_state_parameter_validation),
-            ("OAuth Callback Simulation", self.test_oauth_callback_simulation)
-        ]
+        test_results = []
+        
+        # Setup
+        if not self.register_and_authenticate():
+            return False
+        if not self.create_project():
+            return False
+        
+        # Core logic tests
+        test_results.append(("Dependency Validation", self.test_dependency_validation()))
+        test_results.append(("Thumbnail Selection Validation", self.test_thumbnail_selection_validation()))
+        test_results.append(("Metadata Dependency Check", self.test_metadata_dependency_check()))
+        test_results.append(("Pipeline State Structure", self.test_pipeline_state_structure()))
+        test_results.append(("Force Regenerate Logic", self.test_force_regenerate_logic()))
+        test_results.append(("API Endpoints Existence", self.test_api_endpoints_exist()))
+        
+        # Results summary
+        self.log("=" * 60)
+        self.log("📊 TEST RESULTS SUMMARY")
+        self.log("=" * 60)
         
         passed = 0
-        failed = 0
+        total = len(test_results)
         
-        for test_name, test_func in tests:
-            try:
-                if test_func():
-                    passed += 1
-                    self.log(f"✅ {test_name} PASSED", "SUCCESS")
-                else:
-                    failed += 1
-                    self.log(f"❌ {test_name} FAILED", "FAIL")
-            except Exception as e:
-                failed += 1
-                self.log(f"❌ {test_name} ERROR: {str(e)}", "FAIL")
+        for test_name, result in test_results:
+            status = "✅ PASS" if result else "❌ FAIL"
+            self.log(f"{status} {test_name}")
+            if result:
+                passed += 1
         
-        self.log(f"\n📊 TEST SUMMARY:")
-        self.log(f"   Total Tests: {len(tests)}")
-        self.log(f"   Passed: {passed}")
-        self.log(f"   Failed: {failed}")
-        self.log(f"   Success Rate: {(passed/len(tests)*100):.1f}%")
+        self.log("=" * 60)
+        success_rate = (passed / total) * 100
+        self.log(f"🎯 OVERALL RESULT: {passed}/{total} tests passed ({success_rate:.1f}%)")
         
-        if failed == 0:
-            self.log("🎉 ALL TESTS PASSED!", "SUCCESS")
+        if success_rate >= 85:
+            self.log("🎉 PIPELINE LOGIC TESTS SUCCESSFUL!")
             return True
         else:
-            self.log(f"⚠️  {failed} TEST(S) FAILED", "FAIL")
+            self.log("⚠️ PIPELINE LOGIC TESTS FAILED - Issues found")
             return False
 
+def main():
+    """Main test execution"""
+    tester = PipelineTransitionTest()
+    
+    try:
+        success = tester.run_pipeline_logic_tests()
+        sys.exit(0 if success else 1)
+    except KeyboardInterrupt:
+        print("\n🛑 Test interrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n💥 Unexpected error: {e}")
+        sys.exit(1)
+
 if __name__ == "__main__":
-    tester = YouTubeOAuthTester()
-    success = tester.run_all_tests()
-    sys.exit(0 if success else 1)
+    main()

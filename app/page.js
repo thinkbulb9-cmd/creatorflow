@@ -262,8 +262,17 @@ export default function App() {
       body: JSON.stringify({ selected_thumbnail_url: thumbnailUrl })
     });
     if (data.success) {
-      toast.success('Thumbnail selected!');
-      refreshProject(projectId);
+      toast.success(data.message || 'Thumbnail selected! Pipeline advanced to Metadata step.');
+      // Refresh project to get updated pipeline state
+      await refreshProject(projectId);
+      
+      // Log progress update
+      if (data.progress) {
+        console.log('[Pipeline] Progress updated:', data.progress);
+      }
+      if (data.current_step) {
+        console.log('[Pipeline] Current active step:', data.current_step.name);
+      }
     }
   };
 
