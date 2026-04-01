@@ -8,10 +8,12 @@ import * as openaiService from '@/lib/services/openai.service';
 import * as heygenService from '@/lib/services/heygen.service';
 import * as youtubeService from '@/lib/services/youtube.service';
 import * as integrationService from '@/lib/services/integration.service';
+import * as pipelineService from '@/lib/services/pipeline.service';
 
 function json(data, status = 200) {
   return NextResponse.json(data, { status });
 }
+
 function error(message, code, status = 400) {
   return NextResponse.json({ success: false, error_code: code, message }, { status });
 }
@@ -23,45 +25,108 @@ async function handleRegister(req) {
     const { name, email, password } = body;
     if (!name || !email || !password) return error('Name, email, and password are required', 'MISSING_FIELDS');
     if (password.length < 6) return error('Password must be at least 6 characters', 'WEAK_PASSWORD');
+    
     const db = await getDb();
     const existing = await db.collection('users').findOne({ email });
     if (existing) return error('Email already registered', 'EMAIL_EXISTS', 409);
+    
     const hashedPassword = await bcrypt.hash(password, 10);
     const userId = uuidv4();
+    
     await db.collection('users').insertOne({
-      _id: userId, name, email, password: hashedPassword,
-      image: null, provider: 'credentials', created_at: new Date()
+      _id: userId, 
+      name, 
+      email, 
+      password: hashedPassword,
+      image: null, 
+      provider: 'credentials', 
+      created_at: new Date()
     });
+    
     return json({ success: true, user: { id: userId, name, email } }, 201);
-  } catch (e) { return error(e.message, 'REGISTER_ERROR', 500); }
+  } catch (e) { 
+    return error(e.message, 'REGISTER_ERROR', 500); 
+  }
 }
 
 // ==================== PROJECTS ====================
 async function handleCreateProject(req, userId) {
   try {
     const body = await req.json();
-    const { concept, duration_seconds, aspect_ratio, language, content_style, publishing_mode, schedule_at } = body;
+    const { 
+      concept, 
+      duration_seconds, 
+      aspect_ratio, 
+      language, 
+      content_style, 
+      publishing_mode, 
+      schedule_date,
+      schedule_time,
+      selected_voice_id,
+      selected_avatar_id
+    } = body;
+    
     if (!concept) return error('Concept is required', 'MISSING_CONCEPT');
+    
     const db = await getDb();
+    
+    // Initialize pipeline state
+    const pipelineState = pipelineService.initializePipelineState();
+    
     const project = {
-      _id: uuidv4(), user_id: userId, concept,
+      _id: uuidv4(), 
+      user_id: userId, 
+      concept,
       duration_seconds: parseInt(duration_seconds) || 60,
-      aspect_ratio: aspect_ratio || '16:9', language: language || 'English',
-      content_style: content_style || 'professional', publishing_mode: publishing_mode || 'draft',
-      schedule_at: schedule_at || null, status: 'submitted',
-      idea_evaluation: null, script: null, scenes: null,
-      video_job_id: null, video_url: null, metadata: null,
-      youtube_video_id: null, error_message: null,
-      created_at: new Date(), updated_at: new Date()
+      aspect_ratio: aspect_ratio || '16:9', 
+      language: language || 'English',
+      content_style: content_style || 'professional', 
+      publishing_mode: publishing_mode || 'draft',
+      schedule_date: schedule_date || null,
+      schedule_time: schedule_time || null,
+      selected_voice_id: selected_voice_id || null,
+      selected_avatar_id: selected_avatar_id || null,
+      
+      // Cached results
+      idea_evaluation: null, 
+      script_data: null, 
+      scenes: null,
+      thumbnail_data: null,
+      metadata: null,
+      
+      // Video status
+      video_job_id: null, 
+      video_url: null,
+      
+      // YouTube status
+      youtube_video_id: null,
+      
+      // Pipeline state
+      pipeline_state: pipelineState,
+      status: 'draft',
+      
+      // Errors
+      provider_errors: [],
+      error_message: null,
+      
+      // Timestamps
+      created_at: new Date(), 
+      updated_at: new Date()
     };
+    
     await db.collection('projects').insertOne(project);
     return json({ success: true, project }, 201);
-  } catch (e) { return error(e.message, 'CREATE_ERROR', 500); }
+  } catch (e) { 
+    return error(e.message, 'CREATE_ERROR', 500); 
+  }
 }
 
 async function handleGetProjects(userId) {
   const db = await getDb();
-  const projects = await db.collection('projects').find({ user_id: userId }).sort({ created_at: -1 }).toArray();
+  const projects = await db.collection('projects')
+    .find({ user_id: userId })
+    .sort({ created_at: -1 })
+    .toArray();
   return json({ success: true, projects });
 }
 
@@ -69,7 +134,17 @@ async function handleGetProject(id, userId) {
   const db = await getDb();
   const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
   if (!project) return error('Project not found', 'NOT_FOUND', 404);
-  return json({ success: true, project });
+  
+  // Calculate progress
+  const progress = pipelineService.calculateProgress(project.pipeline_state || {});
+  const currentStep = pipelineService.getCurrentStepInfo(project.pipeline_state || {});
+  
+  return json({ 
+    success: true, 
+    project,
+    progress,
+    current_step: currentStep
+  });
 }
 
 async function handleDeleteProject(id, userId) {
@@ -78,76 +153,404 @@ async function handleDeleteProject(id, userId) {
   return json({ success: true });
 }
 
-// ==================== PIPELINE STEPS ====================
-async function handleEvaluateIdea(id, userId) {
+//  ==================== PIPELINE STEPS WITH CACHING ====================
+async function handleEvaluateIdea(id, userId, forceRegenerate = false) {
   try {
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    
+    // Check if we can run this step
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    if (!pipelineService.canRunStep('evaluate', pipelineState) && !forceRegenerate) {
+      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+    }
+    
+    // Check cache unless force regenerate
+    if (!forceRegenerate && project.idea_evaluation) {
+      return json({ 
+        success: true, 
+        evaluation: project.idea_evaluation, 
+        cached: true,
+        message: 'Loaded from cache. Click "Regenerate" to create new evaluation.'
+      });
+    }
+    
+    // Mark step as running
+    const updatedState = pipelineService.markStepRunning(pipelineState, 'evaluate');
+    await db.collection('projects').updateOne(
+      { _id: id }, 
+      { $set: { pipeline_state: updatedState, updated_at: new Date() } }
+    );
+    
+    // Generate evaluation
     const evaluation = await openaiService.evaluateIdea(project.concept, userId);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { idea_evaluation: evaluation, status: 'idea_evaluated', updated_at: new Date() } });
-    return json({ success: true, evaluation, status: 'idea_evaluated' });
-  } catch (e) { return error(e.message, 'EVALUATE_ERROR', 500); }
+    
+    // Mark step as completed
+    const completedState = pipelineService.markStepCompleted(updatedState, 'evaluate');
+    await db.collection('projects').updateOne(
+      { _id: id }, 
+      { 
+        $set: { 
+          idea_evaluation: evaluation, 
+          pipeline_state: completedState,
+          status: 'evaluated', 
+          updated_at: new Date() 
+        } 
+      }
+    );
+    
+    return json({ success: true, evaluation, cached: false });
+  } catch (e) {
+    // Mark step as failed
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id });
+    if (project) {
+      const failedState = pipelineService.markStepFailed(project.pipeline_state, 'evaluate', e.message);
+      await db.collection('projects').updateOne(
+        { _id: id },
+        { 
+          $set: { pipeline_state: failedState },
+          $push: { provider_errors: { step: 'evaluate', error: e.message, timestamp: new Date() } }
+        }
+      );
+    }
+    return error(e.message, 'EVALUATE_ERROR', 500);
+  }
 }
 
-async function handleGenerateScript(id, userId) {
+async function handleGenerateScript(id, userId, forceRegenerate = false) {
   try {
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
-    const script = await openaiService.generateScript(project.concept, project.duration_seconds, project.content_style, project.language, userId);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { script, status: 'script_ready', updated_at: new Date() } });
-    return json({ success: true, script, status: 'script_ready' });
-  } catch (e) { return error(e.message, 'SCRIPT_ERROR', 500); }
+    
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    if (!pipelineService.canRunStep('script', pipelineState) && !forceRegenerate) {
+      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+    }
+    
+    // Check cache
+    if (!forceRegenerate && project.script_data) {
+      return json({ 
+        success: true, 
+        script: project.script_data, 
+        cached: true,
+        message: 'Loaded from cache. Click "Regenerate" to create new script.'
+      });
+    }
+    
+    const updatedState = pipelineService.markStepRunning(pipelineState, 'script');
+    await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
+    
+    const script = await openaiService.generateScript(
+      project.concept, 
+      project.duration_seconds, 
+      project.content_style, 
+      project.language, 
+      userId
+    );
+    
+    const completedState = pipelineService.markStepCompleted(updatedState, 'script');
+    await db.collection('projects').updateOne(
+      { _id: id }, 
+      { $set: { script_data: script, pipeline_state: completedState, updated_at: new Date() } }
+    );
+    
+    return json({ success: true, script, cached: false });
+  } catch (e) {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id });
+    if (project) {
+      const failedState = pipelineService.markStepFailed(project.pipeline_state, 'script', e.message);
+      await db.collection('projects').updateOne(
+        { _id: id },
+        { 
+          $set: { pipeline_state: failedState },
+          $push: { provider_errors: { step: 'script', error: e.message, timestamp: new Date() } }
+        }
+      );
+    }
+    return error(e.message, 'SCRIPT_ERROR', 500);
+  }
 }
 
-async function handleGenerateScenes(id, userId) {
+async function handleGenerateScenes(id, userId, forceRegenerate = false) {
   try {
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
-    const scriptText = project.script?.full_script || project.concept;
-    const scenesData = await openaiService.generateScenes(scriptText, project.duration_seconds, project.aspect_ratio, userId);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { scenes: scenesData.scenes || scenesData, status: 'scenes_ready', updated_at: new Date() } });
-    return json({ success: true, scenes: scenesData, status: 'scenes_ready' });
-  } catch (e) { return error(e.message, 'SCENES_ERROR', 500); }
+    
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    if (!pipelineService.canRunStep('scenes', pipelineState) && !forceRegenerate) {
+      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+    }
+    
+    // Check cache
+    if (!forceRegenerate && project.scenes && project.scenes.length > 0) {
+      return json({ 
+        success: true, 
+        scenes: project.scenes, 
+        cached: true,
+        message: 'Loaded from cache. Click "Regenerate" to create new scenes.'
+      });
+    }
+    
+    const updatedState = pipelineService.markStepRunning(pipelineState, 'scenes');
+    await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
+    
+    const scriptText = project.script_data?.full_script || project.concept;
+    const scenesData = await openaiService.generateScenes(
+      scriptText, 
+      project.duration_seconds, 
+      project.aspect_ratio, 
+      userId
+    );
+    
+    const scenes = scenesData.scenes || scenesData;
+    const completedState = pipelineService.markStepCompleted(updatedState, 'scenes');
+    await db.collection('projects').updateOne(
+      { _id: id }, 
+      { $set: { scenes, pipeline_state: completedState, updated_at: new Date() } }
+    );
+    
+    return json({ success: true, scenes, cached: false });
+  } catch (e) {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id });
+    if (project) {
+      const failedState = pipelineService.markStepFailed(project.pipeline_state, 'scenes', e.message);
+      await db.collection('projects').updateOne(
+        { _id: id },
+        { 
+          $set: { pipeline_state: failedState },
+          $push: { provider_errors: { step: 'scenes', error: e.message, timestamp: new Date() } }
+        }
+      );
+    }
+    return error(e.message, 'SCENES_ERROR', 500);
+  }
 }
 
-async function handleGenerateVideo(id, userId) {
+async function handleGenerateVideo(id, userId, forceRegenerate = false) {
   try {
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    if (!pipelineService.canRunStep('video', pipelineState) && !forceRegenerate) {
+      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+    }
+    
+    // Check cache
+    if (!forceRegenerate && project.video_url) {
+      return json({ 
+        success: true, 
+        video_url: project.video_url,
+        job_id: project.video_job_id,
+        cached: true,
+        message: 'Video already generated. Click "Regenerate" to create new video.'
+      });
+    }
+    
+    const updatedState = pipelineService.markStepRunning(pipelineState, 'video');
+    await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
+    
     const scenes = Array.isArray(project.scenes) ? project.scenes : project.scenes?.scenes || [];
-    const result = await heygenService.createVideo(scenes, project.aspect_ratio, userId);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { video_job_id: result.job_id, status: 'video_generating', updated_at: new Date() } });
-    return json({ success: true, job_id: result.job_id, status: 'video_generating' });
-  } catch (e) { return error(e.message, 'VIDEO_ERROR', 500); }
+    const result = await heygenService.createVideo(
+      scenes, 
+      project.aspect_ratio, 
+      userId,
+      project.selected_avatar_id,
+      project.selected_voice_id
+    );
+    
+    await db.collection('projects').updateOne(
+      { _id: id }, 
+      { $set: { video_job_id: result.job_id, updated_at: new Date() } }
+    );
+    
+    return json({ success: true, job_id: result.job_id, status: 'processing', cached: false });
+  } catch (e) {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id });
+    if (project) {
+      const failedState = pipelineService.markStepFailed(project.pipeline_state, 'video', e.message);
+      await db.collection('projects').updateOne(
+        { _id: id },
+        { 
+          $set: { pipeline_state: failedState },
+          $push: { provider_errors: { step: 'video', error: e.message, timestamp: new Date() } }
+        }
+      );
+    }
+    return error(e.message, 'VIDEO_ERROR', 500);
+  }
 }
 
 async function handlePollVideoJob(jobId, userId) {
   try {
     const result = await heygenService.getVideoStatus(jobId, userId);
+    
     if (result.status === 'completed' && result.video_url) {
       const db = await getDb();
-      await db.collection('projects').updateOne(
-        { video_job_id: jobId, user_id: userId },
-        { $set: { video_url: result.video_url, status: 'video_ready', updated_at: new Date() } }
-      );
+      const project = await db.collection('projects').findOne({ video_job_id: jobId, user_id: userId });
+      
+      if (project) {
+        const completedState = pipelineService.markStepCompleted(project.pipeline_state, 'video');
+        await db.collection('projects').updateOne(
+          { video_job_id: jobId, user_id: userId },
+          { $set: { video_url: result.video_url, pipeline_state: completedState, updated_at: new Date() } }
+        );
+      }
     }
+    
     return json({ success: true, ...result });
-  } catch (e) { return error(e.message, 'POLL_ERROR', 500); }
+  } catch (e) { 
+    return error(e.message, 'POLL_ERROR', 500); 
+  }
 }
 
-async function handleGenerateMetadata(id, userId) {
+async function handleGenerateThumbnail(id, userId, forceRegenerate = false) {
   try {
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
-    const metadata = await openaiService.generateMetadata(project.concept, project.script?.full_script, userId);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { metadata, status: 'metadata_ready', updated_at: new Date() } });
-    return json({ success: true, metadata, status: 'metadata_ready' });
-  } catch (e) { return error(e.message, 'METADATA_ERROR', 500); }
+    
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    if (!pipelineService.canRunStep('thumbnail', pipelineState) && !forceRegenerate) {
+      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+    }
+    
+    // Check cache
+    if (!forceRegenerate && project.thumbnail_data && project.thumbnail_data.images) {
+      return json({ 
+        success: true, 
+        thumbnail_data: project.thumbnail_data, 
+        cached: true,
+        message: 'Loaded from cache. Click "Regenerate" to create new thumbnails.'
+      });
+    }
+    
+    const updatedState = pipelineService.markStepRunning(pipelineState, 'thumbnail');
+    await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
+    
+    // Get thumbnail prompt from metadata or generate one
+    const thumbnailPrompt = project.metadata?.thumbnail_prompt || 
+                           `YouTube thumbnail for: ${project.concept}`;
+    
+    // Generate thumbnails for all aspect ratios
+    const images = await openaiService.generateThumbnail(
+      thumbnailPrompt,
+      ['16:9', '9:16', '1:1'],
+      userId
+    );
+    
+    const thumbnailData = {
+      prompt: thumbnailPrompt,
+      images: images,
+      selected: images['16:9'], // Default to 16:9
+      generated_at: new Date()
+    };
+    
+    const completedState = pipelineService.markStepCompleted(updatedState, 'thumbnail');
+    await db.collection('projects').updateOne(
+      { _id: id }, 
+      { $set: { thumbnail_data: thumbnailData, pipeline_state: completedState, updated_at: new Date() } }
+    );
+    
+    return json({ success: true, thumbnail_data: thumbnailData, cached: false });
+  } catch (e) {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id });
+    if (project) {
+      const failedState = pipelineService.markStepFailed(project.pipeline_state, 'thumbnail', e.message);
+      await db.collection('projects').updateOne(
+        { _id: id },
+        { 
+          $set: { pipeline_state: failedState },
+          $push: { provider_errors: { step: 'thumbnail', error: e.message, timestamp: new Date() } }
+        }
+      );
+    }
+    return error(e.message, 'THUMBNAIL_ERROR', 500);
+  }
+}
+
+async function handleSelectThumbnail(id, userId, req) {
+  try {
+    const body = await req.json();
+    const { selected_thumbnail_url } = body;
+    
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    
+    const thumbnailData = { ...project.thumbnail_data, selected: selected_thumbnail_url };
+    await db.collection('projects').updateOne(
+      { _id: id },
+      { $set: { thumbnail_data: thumbnailData, updated_at: new Date() } }
+    );
+    
+    return json({ success: true, thumbnail_data: thumbnailData });
+  } catch (e) {
+    return error(e.message, 'SELECT_THUMBNAIL_ERROR', 500);
+  }
+}
+
+async function handleGenerateMetadata(id, userId, forceRegenerate = false) {
+  try {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
+    if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    if (!pipelineService.canRunStep('metadata', pipelineState) && !forceRegenerate) {
+      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+    }
+    
+    // Check cache
+    if (!forceRegenerate && project.metadata) {
+      return json({ 
+        success: true, 
+        metadata: project.metadata, 
+        cached: true,
+        message: 'Loaded from cache. Click "Regenerate" to create new metadata.'
+      });
+    }
+    
+    const updatedState = pipelineService.markStepRunning(pipelineState, 'metadata');
+    await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
+    
+    const metadata = await openaiService.generateMetadata(
+      project.concept, 
+      project.script_data?.full_script, 
+      userId
+    );
+    
+    const completedState = pipelineService.markStepCompleted(updatedState, 'metadata');
+    await db.collection('projects').updateOne(
+      { _id: id }, 
+      { $set: { metadata, pipeline_state: completedState, updated_at: new Date() } }
+    );
+    
+    return json({ success: true, metadata, cached: false });
+  } catch (e) {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id });
+    if (project) {
+      const failedState = pipelineService.markStepFailed(project.pipeline_state, 'metadata', e.message);
+      await db.collection('projects').updateOne(
+        { _id: id },
+        { 
+          $set: { pipeline_state: failedState },
+          $push: { provider_errors: { step: 'metadata', error: e.message, timestamp: new Date() } }
+        }
+      );
+    }
+    return error(e.message, 'METADATA_ERROR', 500);
+  }
 }
 
 async function handlePublishYoutube(id, userId) {
@@ -155,12 +558,46 @@ async function handlePublishYoutube(id, userId) {
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    if (!pipelineService.canRunStep('upload', pipelineState)) {
+      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+    }
+    
+    const updatedState = pipelineService.markStepRunning(pipelineState, 'upload');
+    await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
+    
     const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
     const accessToken = ytInt?.config_json?.access_token;
-    const result = await youtubeService.uploadVideo(accessToken, project.video_url, project.metadata || {});
-    await db.collection('projects').updateOne({ _id: id }, { $set: { youtube_video_id: result.video_id, status: 'youtube_uploaded', updated_at: new Date() } });
-    return json({ success: true, ...result, status: 'youtube_uploaded' });
-  } catch (e) { return error(e.message, 'UPLOAD_ERROR', 500); }
+    
+    const result = await youtubeService.uploadVideo(
+      accessToken, 
+      project.video_url, 
+      project.metadata || {}
+    );
+    
+    const completedState = pipelineService.markStepCompleted(updatedState, 'upload');
+    await db.collection('projects').updateOne(
+      { _id: id }, 
+      { $set: { youtube_video_id: result.video_id, pipeline_state: completedState, updated_at: new Date() } }
+    );
+    
+    return json({ success: true, ...result });
+  } catch (e) {
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id });
+    if (project) {
+      const failedState = pipelineService.markStepFailed(project.pipeline_state, 'upload', e.message);
+      await db.collection('projects').updateOne(
+        { _id: id },
+        { 
+          $set: { pipeline_state: failedState },
+          $push: { provider_errors: { step: 'upload', error: e.message, timestamp: new Date() } }
+        }
+      );
+    }
+    return error(e.message, 'UPLOAD_ERROR', 500);
+  }
 }
 
 async function handleScheduleYoutube(id, userId) {
@@ -168,58 +605,46 @@ async function handleScheduleYoutube(id, userId) {
     const db = await getDb();
     const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
     if (!project) return error('Project not found', 'NOT_FOUND', 404);
+    
+    const pipelineState = project.pipeline_state || pipelineService.initializePipelineState();
+    if (!pipelineService.canRunStep('schedule', pipelineState)) {
+      return error('Previous steps must be completed first', 'DEPENDENCY_ERROR', 400);
+    }
+    
+    const updatedState = pipelineService.markStepRunning(pipelineState, 'schedule');
+    await db.collection('projects').updateOne({ _id: id }, { $set: { pipeline_state: updatedState } });
+    
     const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
     const accessToken = ytInt?.config_json?.access_token;
-    const result = await youtubeService.scheduleVideo(accessToken, project.youtube_video_id, project.schedule_at);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { status: 'scheduled', updated_at: new Date() } });
-    return json({ success: true, ...result, status: 'scheduled' });
-  } catch (e) { return error(e.message, 'SCHEDULE_ERROR', 500); }
-}
-
-async function handleRunPipeline(id, userId) {
-  const db = await getDb();
-  const project = await db.collection('projects').findOne({ _id: id, user_id: userId });
-  if (!project) return error('Project not found', 'NOT_FOUND', 404);
-  try {
-    const evaluation = await openaiService.evaluateIdea(project.concept, userId);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { idea_evaluation: evaluation, status: 'idea_evaluated', updated_at: new Date() } });
-
-    const script = await openaiService.generateScript(project.concept, project.duration_seconds, project.content_style, project.language, userId);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { script, status: 'script_ready', updated_at: new Date() } });
-
-    const scenesData = await openaiService.generateScenes(script.full_script, project.duration_seconds, project.aspect_ratio, userId);
-    const scenes = scenesData.scenes || scenesData;
-    await db.collection('projects').updateOne({ _id: id }, { $set: { scenes, status: 'scenes_ready', updated_at: new Date() } });
-
-    const videoResult = await heygenService.createVideo(Array.isArray(scenes) ? scenes : [], project.aspect_ratio, userId);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { video_job_id: videoResult.job_id, status: 'video_generating', updated_at: new Date() } });
-
-    const videoStatus = await heygenService.getVideoStatus(videoResult.job_id, userId);
-    if (videoStatus.status === 'completed') {
-      await db.collection('projects').updateOne({ _id: id }, { $set: { video_url: videoStatus.video_url, status: 'video_ready', updated_at: new Date() } });
-    } else {
-      const updated = await db.collection('projects').findOne({ _id: id });
-      return json({ success: true, project: updated, message: 'Video still generating' });
-    }
-
-    const metadata = await openaiService.generateMetadata(project.concept, script.full_script, userId);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { metadata, status: 'metadata_ready', updated_at: new Date() } });
-
-    const ytInt = await integrationService.getUserIntegration(userId, 'youtube');
-    const accessToken = ytInt?.config_json?.access_token;
-    const uploadResult = await youtubeService.uploadVideo(accessToken, videoStatus.video_url, metadata);
-    await db.collection('projects').updateOne({ _id: id }, { $set: { youtube_video_id: uploadResult.video_id, status: 'youtube_uploaded', updated_at: new Date() } });
-
-    if (project.publishing_mode === 'scheduled' && project.schedule_at) {
-      await youtubeService.scheduleVideo(accessToken, uploadResult.video_id, project.schedule_at);
-      await db.collection('projects').updateOne({ _id: id }, { $set: { status: 'scheduled', updated_at: new Date() } });
-    }
-
-    const updated = await db.collection('projects').findOne({ _id: id });
-    return json({ success: true, project: updated });
+    
+    const scheduleDateTime = `${project.schedule_date}T${project.schedule_time}`;
+    const result = await youtubeService.scheduleVideo(
+      accessToken, 
+      project.youtube_video_id, 
+      scheduleDateTime
+    );
+    
+    const completedState = pipelineService.markStepCompleted(updatedState, 'schedule');
+    await db.collection('projects').updateOne(
+      { _id: id }, 
+      { $set: { pipeline_state: completedState, status: 'scheduled', updated_at: new Date() } }
+    );
+    
+    return json({ success: true, ...result });
   } catch (e) {
-    await db.collection('projects').updateOne({ _id: id }, { $set: { status: 'failed', error_message: e.message, updated_at: new Date() } });
-    return error(e.message, 'PIPELINE_ERROR', 500);
+    const db = await getDb();
+    const project = await db.collection('projects').findOne({ _id: id });
+    if (project) {
+      const failedState = pipelineService.markStepFailed(project.pipeline_state, 'schedule', e.message);
+      await db.collection('projects').updateOne(
+        { _id: id },
+        { 
+          $set: { pipeline_state: failedState },
+          $push: { provider_errors: { step: 'schedule', error: e.message, timestamp: new Date() } }
+        }
+      );
+    }
+    return error(e.message, 'SCHEDULE_ERROR', 500);
   }
 }
 
@@ -237,21 +662,28 @@ async function validateApiKey(provider, configJson) {
       });
       return { valid: res.ok, message: res.ok ? 'Connected successfully' : `Invalid API key (${res.status})` };
     }
+    
     if (provider === 'heygen') {
       const res = await fetch('https://api.heygen.com/v2/avatars', {
         headers: { 'X-Api-Key': configJson.api_key }
       });
       const body = await res.json().catch(() => null);
+      
       if (res.ok) {
         const avatars = body?.data?.avatars || [];
         const firstAvatar = avatars.length > 0 ? avatars[0].avatar_id : null;
         return {
           valid: true,
           message: `Connected successfully. ${avatars.length} avatar(s) found.`,
-          avatars: avatars.slice(0, 20).map(a => ({ avatar_id: a.avatar_id, avatar_name: a.avatar_name || a.avatar_id })),
+          avatars: avatars.slice(0, 20).map(a => ({ 
+            avatar_id: a.avatar_id, 
+            avatar_name: a.avatar_name || a.avatar_id,
+            gender: a.gender
+          })),
           default_avatar_id: firstAvatar
         };
       }
+      
       let detail = 'Invalid API key';
       if (body) {
         if (typeof body.message === 'string') detail = body.message;
@@ -262,9 +694,11 @@ async function validateApiKey(provider, configJson) {
       }
       return { valid: false, message: `HeyGen: ${detail}` };
     }
+    
     if (provider === 'youtube') {
       return { valid: true, message: 'YouTube credentials saved. Use Connect OAuth to authorize.' };
     }
+    
     return { valid: true, message: 'Saved' };
   } catch (e) {
     return { valid: false, message: `Validation error: ${e.message}` };
@@ -286,10 +720,15 @@ async function handleSaveIntegration(req, userId) {
 
     const result = await integrationService.saveIntegration(userId, provider, finalConfig, validation.valid);
     return json({
-      success: true, integration: result, connected: validation.valid, message: validation.message,
+      success: true, 
+      integration: result, 
+      connected: validation.valid, 
+      message: validation.message,
       ...(validation.avatars ? { avatars: validation.avatars } : {})
     });
-  } catch (e) { return error(e.message, 'SAVE_ERROR', 500); }
+  } catch (e) { 
+    return error(e.message, 'SAVE_ERROR', 500); 
+  }
 }
 
 async function handleDeleteIntegration(provider, userId) {
@@ -302,9 +741,13 @@ async function handleTestIntegration(req, userId) {
     const body = await req.json();
     const { provider } = body;
     const integration = await integrationService.getUserIntegration(userId, provider);
+    
     if (!integration) return json({ success: true, connected: false, message: 'Not configured' });
+    
     const apiKey = integration.config_json?.api_key;
-    if (!apiKey && provider !== 'youtube') return json({ success: true, connected: false, message: 'No API key found' });
+    if (!apiKey && provider !== 'youtube') {
+      return json({ success: true, connected: false, message: 'No API key found' });
+    }
 
     const validation = await validateApiKey(provider, integration.config_json);
 
@@ -317,26 +760,122 @@ async function handleTestIntegration(req, userId) {
     }
 
     return json({ success: true, connected: validation.valid, message: validation.message });
-  } catch (e) { return json({ success: true, connected: false, message: e.message }); }
+  } catch (e) { 
+    return json({ success: true, connected: false, message: e.message }); 
+  }
+}
+
+// ==================== HEYGEN VOICES & AVATARS ====================
+async function handleGetVoices(userId) {
+  try {
+    const int = await integrationService.getUserIntegration(userId, 'heygen');
+    if (!int?.config_json?.api_key) {
+      return error('HeyGen not connected', 'NOT_CONFIGURED', 400);
+    }
+    
+    const voices = await heygenService.listVoices(int.config_json.api_key);
+    return json({ success: true, voices, current_voice_id: int.config_json?.voice_id || null });
+  } catch (e) { 
+    return error(e.message, 'VOICES_ERROR', 500); 
+  }
+}
+
+async function handleGetAvatars(userId) {
+  try {
+    const int = await integrationService.getUserIntegration(userId, 'heygen');
+    if (!int?.config_json?.api_key) {
+      return error('HeyGen not connected', 'NOT_CONFIGURED', 400);
+    }
+    
+    const avatars = await heygenService.listAvatars(int.config_json.api_key);
+    return json({ success: true, avatars, current_avatar_id: int.config_json?.avatar_id || null });
+  } catch (e) { 
+    return error(e.message, 'AVATARS_ERROR', 500); 
+  }
+}
+
+// ==================== LANGUAGES ====================
+async function handleGetLanguages() {
+  const languages = heygenService.getSupportedLanguages();
+  return json({ success: true, languages });
+}
+
+// ==================== ANALYTICS ====================
+async function handleGetAnalytics(userId, timeframe = '7d') {
+  const db = await getDb();
+  const projects = await db.collection('projects')
+    .find({ user_id: userId })
+    .sort({ created_at: -1 })
+    .toArray();
+  
+  // Mock analytics data (ready for real YouTube Analytics API integration)
+  const analytics = {
+    views: Math.floor(Math.random() * 50000) + 10000,
+    clicks: Math.floor(Math.random() * 5000) + 1000,
+    shares: Math.floor(Math.random() * 500) + 100,
+    watch_time: Math.floor(Math.random() * 100000) + 20000, // seconds
+    published_videos: projects.filter(p => p.youtube_video_id).length,
+    scheduled_videos: projects.filter(p => p.status === 'scheduled').length,
+    timeframe,
+    
+    // Sample chart data
+    chart_data: Array.from({ length: timeframe === '7d' ? 7 : 30 }, (_, i) => ({
+      date: new Date(Date.now() - (i * 24 * 60 * 60 * 1000)).toISOString().split('T')[0],
+      views: Math.floor(Math.random() * 5000) + 1000,
+      clicks: Math.floor(Math.random() * 500) + 100
+    })).reverse(),
+    
+    is_mock: true // Flag to indicate this is mock data
+  };
+  
+  return json({ success: true, analytics });
 }
 
 // ==================== DASHBOARD ====================
 async function handleDashboardStats(userId) {
   const db = await getDb();
-  const projects = await db.collection('projects').find({ user_id: userId }).sort({ created_at: -1 }).toArray();
+  const projects = await db.collection('projects')
+    .find({ user_id: userId })
+    .sort({ created_at: -1 })
+    .toArray();
+  
   const total = projects.length;
-  const inProgress = projects.filter(p => !['scheduled', 'failed', 'submitted'].includes(p.status)).length;
-  const completed = projects.filter(p => ['scheduled', 'youtube_uploaded'].includes(p.status)).length;
+  
+  // Count based on pipeline state
+  const inProgress = projects.filter(p => {
+    const pipelineState = p.pipeline_state || {};
+    const hasStarted = Object.values(pipelineState).some(s => s.status === 'running' || s.status === 'completed');
+    const allCompleted = Object.values(pipelineState).every(s => s.status === 'completed');
+    return hasStarted && !allCompleted;
+  }).length;
+  
+  const completed = projects.filter(p => {
+    const pipelineState = p.pipeline_state || {};
+    return Object.values(pipelineState).every(s => s.status === 'completed');
+  }).length;
+  
   const scheduled = projects.filter(p => p.status === 'scheduled').length;
-  const failed = projects.filter(p => p.status === 'failed').length;
-  return json({ success: true, stats: { total, in_progress: inProgress, completed, scheduled, failed }, recent_projects: projects.slice(0, 5) });
+  
+  const failed = projects.filter(p => {
+    const pipelineState = p.pipeline_state || {};
+    return Object.values(pipelineState).some(s => s.status === 'failed');
+  }).length;
+  
+  return json({ 
+    success: true, 
+    stats: { total, in_progress: inProgress, completed, scheduled, failed }, 
+    recent_projects: projects.slice(0, 5) 
+  });
 }
 
 // ==================== YOUTUBE OAUTH ====================
 async function handleYoutubeAuth(userId) {
   const integration = await integrationService.getUserIntegration(userId, 'youtube');
   const clientId = integration?.config_json?.client_id;
-  if (!clientId) return error('YouTube not configured. Add Client ID in Integrations.', 'NOT_CONFIGURED');
+  if (!clientId) {
+    return error('YouTube not configured. Add Client ID in Integrations.', 'NOT_CONFIGURED');
+  }
+  
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
   const redirectUri = `${baseUrl}/api/youtube/callback`;
   const authUrl = youtubeService.getAuthUrl(clientId, redirectUri);
@@ -348,65 +887,94 @@ async function handleYoutubeCallback(request, userId) {
     const { searchParams } = new URL(request.url);
     const code = searchParams.get('code');
     if (!code) return error('Missing code', 'MISSING_CODE');
+    
     const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
     return NextResponse.redirect(`${baseUrl}/?youtube_callback=success`);
-  } catch (e) { return error(e.message, 'CALLBACK_ERROR', 500); }
+  } catch (e) { 
+    return error(e.message, 'CALLBACK_ERROR', 500); 
+  }
 }
 
 // ==================== ROUTE HANDLER ====================
 export async function GET(request, { params }) {
   const path = params?.path || [];
+  
+  // Public routes
   if (path[0] === 'health') return json({ status: 'ok' });
   if (path[0] === 'youtube' && path[1] === 'callback') return handleYoutubeCallback(request);
+  if (path[0] === 'languages') return handleGetLanguages();
+  
+  // Protected routes
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return error('Unauthorized', 'UNAUTHORIZED', 401);
   const userId = session.user.id;
+  
   if (path[0] === 'projects' && path.length === 1) return handleGetProjects(userId);
   if (path[0] === 'projects' && path.length === 2) return handleGetProject(path[1], userId);
   if (path[0] === 'integrations') return handleGetIntegrations(userId);
   if (path[0] === 'dashboard' && path[1] === 'stats') return handleDashboardStats(userId);
-  if (path[0] === 'youtube' && path[1] === 'auth') return handleYoutubeAuth(userId);
-  if (path[0] === 'heygen' && path[1] === 'avatars') {
-    try {
-      const int = await integrationService.getUserIntegration(userId, 'heygen');
-      if (!int?.config_json?.api_key) return error('HeyGen not connected', 'NOT_CONFIGURED', 400);
-      const avatars = await heygenService.listAvatars(int.config_json.api_key);
-      return json({ success: true, avatars, current_avatar_id: int.config_json?.avatar_id || null });
-    } catch (e) { return error(e.message, 'AVATARS_ERROR', 500); }
+  if (path[0] === 'analytics') {
+    const { searchParams } = new URL(request.url);
+    const timeframe = searchParams.get('timeframe') || '7d';
+    return handleGetAnalytics(userId, timeframe);
   }
-  if (path[0] === 'video-jobs' && path.length === 3 && path[2] === 'poll') return handlePollVideoJob(path[1], userId);
+  if (path[0] === 'youtube' && path[1] === 'auth') return handleYoutubeAuth(userId);
+  if (path[0] === 'heygen' && path[1] === 'avatars') return handleGetAvatars(userId);
+  if (path[0] === 'heygen' && path[1] === 'voices') return handleGetVoices(userId);
+  if (path[0] === 'video-jobs' && path.length === 3 && path[2] === 'poll') {
+    return handlePollVideoJob(path[1], userId);
+  }
+  
   return error('Not found', 'NOT_FOUND', 404);
 }
 
 export async function POST(request, { params }) {
   const path = params?.path || [];
+  
+  // Public routes
   if (path[0] === 'register') return handleRegister(request);
+  
+  // Protected routes
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return error('Unauthorized', 'UNAUTHORIZED', 401);
   const userId = session.user.id;
+  
   if (path[0] === 'projects' && path.length === 1) return handleCreateProject(request, userId);
+  
   if (path[0] === 'projects' && path.length === 3) {
-    const id = path[1]; const action = path[2];
-    if (action === 'evaluate') return handleEvaluateIdea(id, userId);
-    if (action === 'generate-script') return handleGenerateScript(id, userId);
-    if (action === 'generate-scenes') return handleGenerateScenes(id, userId);
-    if (action === 'generate-video') return handleGenerateVideo(id, userId);
-    if (action === 'generate-metadata') return handleGenerateMetadata(id, userId);
+    const id = path[1];
+    const action = path[2];
+    
+    // Check for regenerate flag
+    const body = await request.clone().json().catch(() => ({}));
+    const forceRegenerate = body.regenerate === true;
+    
+    if (action === 'evaluate') return handleEvaluateIdea(id, userId, forceRegenerate);
+    if (action === 'generate-script') return handleGenerateScript(id, userId, forceRegenerate);
+    if (action === 'generate-scenes') return handleGenerateScenes(id, userId, forceRegenerate);
+    if (action === 'generate-video') return handleGenerateVideo(id, userId, forceRegenerate);
+    if (action === 'generate-thumbnail') return handleGenerateThumbnail(id, userId, forceRegenerate);
+    if (action === 'select-thumbnail') return handleSelectThumbnail(id, userId, request);
+    if (action === 'generate-metadata') return handleGenerateMetadata(id, userId, forceRegenerate);
     if (action === 'publish-youtube') return handlePublishYoutube(id, userId);
     if (action === 'schedule-youtube') return handleScheduleYoutube(id, userId);
-    if (action === 'run-pipeline') return handleRunPipeline(id, userId);
   }
+  
   if (path[0] === 'integrations' && path[1] === 'test') return handleTestIntegration(request, userId);
   if (path[0] === 'integrations' && path.length === 1) return handleSaveIntegration(request, userId);
+  
   return error('Not found', 'NOT_FOUND', 404);
 }
 
 export async function DELETE(request, { params }) {
   const path = params?.path || [];
+  
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return error('Unauthorized', 'UNAUTHORIZED', 401);
   const userId = session.user.id;
+  
   if (path[0] === 'projects' && path.length === 2) return handleDeleteProject(path[1], userId);
   if (path[0] === 'integrations' && path.length === 2) return handleDeleteIntegration(path[1], userId);
+  
   return error('Not found', 'NOT_FOUND', 404);
 }
