@@ -1415,6 +1415,7 @@ export async function GET(request, { params }) {
   
   if (path[0] === 'projects' && path.length === 1) return handleGetProjects(userId);
   if (path[0] === 'projects' && path.length === 2) return handleGetProject(path[1], userId);
+  if (path[0] === 'projects' && path.length === 3 && path[2] === 'validate') return handleValidateProject(path[1], userId);
   if (path[0] === 'integrations') return handleGetIntegrations(userId);
   if (path[0] === 'dashboard' && path[1] === 'stats') return handleDashboardStats(userId);
   if (path[0] === 'analytics') {
@@ -1464,6 +1465,7 @@ export async function POST(request, { params }) {
     if (action === 'generate-metadata') return handleGenerateMetadata(id, userId, forceRegenerate);
     if (action === 'publish-youtube') return handlePublishYoutube(id, userId);
     if (action === 'schedule-youtube') return handleScheduleYoutube(id, userId);
+    if (action === 'run-pipeline') return handleRunFullPipeline(id, userId);
   }
   
   if (path[0] === 'integrations' && path[1] === 'test') return handleTestIntegration(request, userId);
