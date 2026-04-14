@@ -101,6 +101,53 @@ CREATE TABLE IF NOT EXISTS integrations (
 -- Index for integration lookups
 CREATE INDEX IF NOT EXISTS idx_integrations_user_provider ON integrations(user_id, provider);
 
+-- ==================== HEYGEN ASSETS TABLE ====================
+CREATE TABLE IF NOT EXISTS heygen_assets (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  asset_type TEXT NOT NULL, -- 'avatar' or 'voice'
+  provider_id TEXT NOT NULL, -- HeyGen's ID for the asset
+  name TEXT NOT NULL,
+  thumbnail_url TEXT,
+  metadata JSONB DEFAULT '{}',
+  is_default BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_heygen_assets_user_type ON heygen_assets(user_id, asset_type);
+
+-- ==================== AUDIT LOG TABLE ====================
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  action TEXT NOT NULL,
+  entity_type TEXT,
+  entity_id UUID,
+  changes JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
+
+-- ==================== PUBLISHING HISTORY TABLE ====================
+CREATE TABLE IF NOT EXISTS publishing_history (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL, -- 'youtube', 'instagram', 'facebook', etc.
+  video_id TEXT,
+  url TEXT,
+  status TEXT DEFAULT 'pending', -- 'pending', 'published', 'failed'
+  published_at TIMESTAMPTZ,
+  error_message TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_publishing_history_project_id ON publishing_history(project_id);
+CREATE INDEX IF NOT EXISTS idx_publishing_history_platform ON publishing_history(platform);
+
 -- ==================== ROW LEVEL SECURITY (optional but recommended) ====================
 -- Uncomment the following if you want to enable RLS
 -- Note: Since we use the service_role key server-side, RLS won't affect API calls
@@ -109,9 +156,16 @@ CREATE INDEX IF NOT EXISTS idx_integrations_user_provider ON integrations(user_i
 -- ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE integrations ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE heygen_assets ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
+-- ALTER TABLE publishing_history ENABLE ROW LEVEL SECURITY;
 
 -- CREATE POLICY "Users can view own data" ON users FOR SELECT USING (auth.uid()::text = id::text);
 -- CREATE POLICY "Users can view own projects" ON projects FOR SELECT USING (auth.uid()::text = user_id::text);
 -- CREATE POLICY "Users can manage own projects" ON projects FOR ALL USING (auth.uid()::text = user_id::text);
 -- CREATE POLICY "Users can view own integrations" ON integrations FOR SELECT USING (auth.uid()::text = user_id::text);
 -- CREATE POLICY "Users can manage own integrations" ON integrations FOR ALL USING (auth.uid()::text = user_id::text);
+-- CREATE POLICY "Users can view own heygen assets" ON heygen_assets FOR SELECT USING (auth.uid()::text = user_id::text);
+-- CREATE POLICY "Users can manage own heygen assets" ON heygen_assets FOR ALL USING (auth.uid()::text = user_id::text);
+-- CREATE POLICY "Users can view own logs" ON audit_logs FOR SELECT USING (auth.uid()::text = user_id::text);
+-- CREATE POLICY "Users can view own publishing history" ON publishing_history FOR SELECT USING (EXISTS (SELECT 1 FROM projects WHERE projects.id = publishing_history.project_id AND projects.user_id = auth.uid()::text));

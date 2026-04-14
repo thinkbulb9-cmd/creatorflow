@@ -1157,8 +1157,122 @@ async function handleScheduleYoutube(id, userId) {
 
 // ==================== INTEGRATIONS ====================
 async function handleGetIntegrations(userId) {
-  const integrations = await integrationService.getAllIntegrations(userId);
-  return json({ success: true, integrations });
+  try {
+    const list = await integrationService.getAllIntegrations(userId);
+    // Transform array → provider-keyed object for frontend
+    // Transform array → provider-keyed object, include is_connected so frontend can show status
+    const integrations = {};
+    list.forEach(i => { integrations[i.provider] = { ...i.config_json, is_connected: i.is_connected }; });
+
+    // Enrich with HeyGen avatars/voices if connected
+    let avatars = [], voices = [];
+    let default_avatar_id = null, default_voice_id = null;
+    const heygenRow = list.find(i => i.provider === 'heygen');
+    if (heygenRow?.is_connected) {
+      const apiKey = await integrationService.getApiKey(userId, 'heygen');
+      if (apiKey) {
+        try {
+          avatars = await heygenService.listAvatars(apiKey);
+          voices = await heygenService.listVoices(apiKey);
+        } catch { /* ignore */ }
+      }
+      default_avatar_id = heygenRow.config_json?.default_avatar_id || null;
+      default_voice_id = heygenRow.config_json?.default_voice_id || null;
+    }
+
+    // Enrich with YouTube channel if connected
+    let youtube_channel = null;
+    const ytRow = list.find(i => i.provider === 'youtube');
+    if (ytRow?.is_connected && ytRow.config_json?.access_token) {
+      try {
+        const valid = await youtubeService.ensureValidToken(ytRow.config_json);
+        if (valid?.access_token) {
+          youtube_channel = await youtubeService.getChannelInfo(valid.access_token);
+        }
+      } catch { /* ignore */ }
+    }
+
+    return json({ success: true, integrations, avatars, voices, default_avatar_id, default_voice_id, youtube_channel });
+  } catch (e) {
+    return errorResponse(e.message, 'GET_INTEGRATIONS_ERROR', 500);
+  }
+}
+
+// Provider-specific save: POST /api/integrations/:provider
+async function handleSaveProviderIntegration(provider, req, userId) {
+  try {
+    const body = await req.json();
+    let configJson = {};
+
+    if (provider === 'openai') {
+      if (!body.api_key) return errorResponse('API key required', 'MISSING_FIELDS');
+      configJson = { api_key: body.api_key };
+    } else if (provider === 'heygen') {
+      if (!body.api_key) return errorResponse('API key required', 'MISSING_FIELDS');
+      configJson = { api_key: body.api_key };
+    } else if (provider === 'youtube') {
+      if (!body.client_id || !body.client_secret) return errorResponse('Client ID and Client Secret required', 'MISSING_FIELDS');
+      configJson = { client_id: body.client_id, client_secret: body.client_secret };
+    } else {
+      return errorResponse('Unknown provider', 'UNKNOWN_PROVIDER');
+    }
+
+    const validation = await validateApiKey(provider, configJson);
+    const existing = await integrationService.getUserIntegration(userId, provider);
+    const finalConfig = existing ? { ...existing.config_json, ...configJson } : configJson;
+    if (provider === 'heygen' && validation.valid && validation.default_avatar_id && !finalConfig.default_avatar_id) {
+      finalConfig.default_avatar_id = validation.default_avatar_id;
+    }
+
+    await integrationService.saveIntegration(userId, provider, finalConfig, validation.valid);
+
+    // Return is_connected so frontend can update badge immediately
+    const response = {
+      success: true,
+      connected: validation.valid,
+      is_connected: validation.valid,
+      message: validation.message,
+      config: { api_key: configJson.api_key ? integrationService.maskApiKey(configJson.api_key) : undefined, is_connected: validation.valid }
+    };
+    if (validation.avatars) response.avatars = validation.avatars;
+    if (validation.voices) response.voices = validation.voices;
+
+    return json(response);
+  } catch (e) {
+    return errorResponse(e.message, 'SAVE_PROVIDER_ERROR', 500);
+  }
+}
+
+// Provider-specific test: POST /api/integrations/:provider/test
+async function handleTestProviderIntegration(provider, userId) {
+  try {
+    const apiKey = await integrationService.getApiKey(userId, provider);
+    if (!apiKey) return errorResponse(`${provider} not configured`, 'NOT_CONFIGURED');
+    const result = await validateApiKey(provider, { api_key: apiKey });
+    if (!result.valid) return errorResponse(result.message || 'Test failed', 'TEST_FAILED');
+    return json({ success: true, message: result.message || 'Connected successfully' });
+  } catch (e) {
+    return errorResponse(e.message, 'TEST_ERROR', 500);
+  }
+}
+
+// Set HeyGen default avatar/voice
+async function handleSetHeygenDefault(field, req, userId) {
+  try {
+    const body = await req.json();
+    const valueKey = field === 'default_avatar_id' ? 'avatar_id' : 'voice_id';
+    const value = body[valueKey];
+    if (!value) return errorResponse(`${valueKey} required`, 'MISSING_FIELDS');
+
+    const existing = await integrationService.getUserIntegration(userId, 'heygen');
+    if (!existing) return errorResponse('HeyGen not configured', 'NOT_CONFIGURED');
+
+    const updatedConfig = { ...existing.config_json, [field]: value };
+    await integrationService.saveIntegration(userId, 'heygen', updatedConfig, existing.is_connected);
+    return json({ success: true, [field]: value });
+  } catch (e) {
+    return errorResponse(e.message, 'SET_DEFAULT_ERROR', 500);
+  }
 }
 
 async function validateApiKey(provider, configJson) {
@@ -1241,6 +1355,70 @@ async function handleSaveIntegration(req, userId) {
 async function handleDeleteIntegration(provider, userId) {
   await integrationService.deleteIntegration(userId, provider);
   return json({ success: true });
+}
+
+// PATCH /api/projects/:id — update project fields (e.g. thumbnail selection)
+async function handleUpdateProjectFields(id, userId, req) {
+  try {
+    const body = await req.json();
+    const updates = {};
+
+    if (body.selected_thumbnail_index !== undefined) {
+      const { data: project } = await supabaseAdmin.from('projects').select('thumbnail_data').eq('id', id).eq('user_id', userId).single();
+      if (!project) return errorResponse('Project not found', 'NOT_FOUND', 404);
+      updates.thumbnail_data = { ...project.thumbnail_data, selected_index: body.selected_thumbnail_index };
+    }
+
+    if (Object.keys(updates).length === 0) return errorResponse('No valid fields to update', 'NOTHING_TO_UPDATE');
+
+    updates.updated_at = new Date().toISOString();
+    await supabaseAdmin.from('projects').update(updates).eq('id', id).eq('user_id', userId);
+    const { data: updated } = await supabaseAdmin.from('projects').select('*').eq('id', id).single();
+    return json({ success: true, project: updated });
+  } catch (e) {
+    return errorResponse(e.message, 'UPDATE_ERROR', 500);
+  }
+}
+
+// POST /api/projects/:id/pipeline — dispatch run/rerun actions
+async function handlePipelineDispatch(id, userId, req) {
+  try {
+    const body = await req.json().catch(() => ({}));
+    const action = body.action || 'run';
+
+    if (action === 'run') return handleRunFullPipeline(id, userId);
+
+    if (action === 'rerun_step') {
+      const step = body.step;
+      const stepToAction = {
+        evaluate: 'evaluate',
+        script: 'generate-script',
+        scenes: 'generate-scenes',
+        video: 'generate-video',
+        thumbnail: 'generate-thumbnail',
+        metadata: 'generate-metadata',
+        upload: 'publish-youtube',
+        schedule: 'schedule-youtube'
+      };
+      const apiAction = stepToAction[step];
+      if (!apiAction) return errorResponse('Unknown step', 'UNKNOWN_STEP');
+
+      // Create a mock request with regenerate flag
+      const mockReq = { clone: () => ({ json: async () => ({ regenerate: true }) }) };
+      if (step === 'evaluate') return handleEvaluateIdea(id, userId, true);
+      if (step === 'script') return handleGenerateScript(id, userId, true);
+      if (step === 'scenes') return handleGenerateScenes(id, userId, true);
+      if (step === 'video') return handleGenerateVideo(id, userId, true);
+      if (step === 'thumbnail') return handleGenerateThumbnail(id, userId, true);
+      if (step === 'metadata') return handleGenerateMetadata(id, userId, true);
+      if (step === 'upload') return handlePublishYoutube(id, userId);
+      if (step === 'schedule') return handleScheduleYoutube(id, userId);
+    }
+
+    return errorResponse('Unknown action', 'UNKNOWN_ACTION');
+  } catch (e) {
+    return errorResponse(e.message, 'PIPELINE_DISPATCH_ERROR', 500);
+  }
 }
 
 async function handleTestIntegration(req, userId) {
@@ -1555,6 +1733,7 @@ export async function GET(request, { params }) {
     const timeframe = searchParams.get('timeframe') || '7d';
     return handleGetAnalytics(userId, timeframe);
   }
+  // Keep legacy routes + new integrations sub-routes
   if (path[0] === 'youtube' && path[1] === 'auth') return handleYoutubeAuth(userId);
   if (path[0] === 'heygen' && path[1] === 'avatars') return handleGetAvatars(userId);
   if (path[0] === 'heygen' && path[1] === 'voices') return handleGetVoices(userId);
@@ -1585,6 +1764,9 @@ export async function POST(request, { params }) {
     const id = path[1];
     const action = path[2];
 
+    // New: pipeline dispatch endpoint
+    if (action === 'pipeline') return handlePipelineDispatch(id, userId, request);
+
     const body = await request.clone().json().catch(() => ({}));
     const forceRegenerate = body.regenerate === true;
 
@@ -1600,6 +1782,36 @@ export async function POST(request, { params }) {
     if (action === 'run-pipeline') return handleRunFullPipeline(id, userId);
   }
 
+  // New: provider-specific integration save: POST /api/integrations/:provider
+  if (path[0] === 'integrations' && path.length === 2) {
+    const provider = path[1];
+    return handleSaveProviderIntegration(provider, request, userId);
+  }
+
+  // New: provider-specific test: POST /api/integrations/:provider/test
+  if (path[0] === 'integrations' && path.length === 3 && path[2] === 'test') {
+    return handleTestProviderIntegration(path[1], userId);
+  }
+
+  // New: HeyGen default avatar/voice: POST /api/integrations/heygen/default-avatar|default-voice
+  if (path[0] === 'integrations' && path[1] === 'heygen' && path[2] === 'default-avatar') {
+    return handleSetHeygenDefault('default_avatar_id', request, userId);
+  }
+  if (path[0] === 'integrations' && path[1] === 'heygen' && path[2] === 'default-voice') {
+    return handleSetHeygenDefault('default_voice_id', request, userId);
+  }
+
+  // New: YouTube auth via integrations path: POST /api/integrations/youtube/auth
+  if (path[0] === 'integrations' && path[1] === 'youtube' && path[2] === 'auth') {
+    // Save youtube credentials then return auth URL
+    const body = await request.clone().json().catch(() => ({}));
+    if (body.client_id && body.client_secret) {
+      await integrationService.saveIntegration(userId, 'youtube', { client_id: body.client_id, client_secret: body.client_secret }, false);
+    }
+    return handleYoutubeAuth(userId);
+  }
+
+  // Legacy routes
   if (path[0] === 'integrations' && path[1] === 'test') return handleTestIntegration(request, userId);
   if (path[0] === 'integrations' && path.length === 1) return handleSaveIntegration(request, userId);
   if (path[0] === 'settings') return handleSaveSettings(request, userId);
@@ -1616,6 +1828,7 @@ export async function DELETE(request, { params }) {
   const userId = session.user.id;
 
   if (path[0] === 'projects' && path.length === 2) return handleDeleteProject(path[1], userId);
+  // Delete by provider name: DELETE /api/integrations/:provider
   if (path[0] === 'integrations' && path.length === 2) return handleDeleteIntegration(path[1], userId);
 
   return errorResponse('Not found', 'NOT_FOUND', 404);
@@ -1628,6 +1841,11 @@ export async function PATCH(request, { params }) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return errorResponse('Unauthorized', 'UNAUTHORIZED', 401);
   const userId = session.user.id;
+
+  // New: PATCH /api/projects/:id — update project fields (thumbnail selection, etc.)
+  if (path[0] === 'projects' && path.length === 2) {
+    return handleUpdateProjectFields(path[1], userId, request);
+  }
 
   if (path[0] === 'projects' && path.length === 3 && path[2] === 'update-concept') {
     return handleUpdateProjectConcept(path[1], userId, request);
