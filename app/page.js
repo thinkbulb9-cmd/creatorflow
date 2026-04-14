@@ -113,7 +113,7 @@ export default function App() {
   useEffect(() => {
     if (selectedProject) {
       const interval = setInterval(() => {
-        refreshProject(selectedProject._id);
+        refreshProject(selectedProject.id);
       }, 3000);
       return () => clearInterval(interval);
     }
@@ -201,7 +201,7 @@ export default function App() {
     const data = await api(`projects/${id}`);
     if (data.success) {
       setSelectedProject(data.project);
-      setProjects(prev => prev.map(p => p._id === id ? data.project : p));
+      setProjects(prev => prev.map(p => p.id === id ? data.project : p));
     }
   };
 
@@ -209,7 +209,7 @@ export default function App() {
     const data = await api(`video-jobs/${jobId}/poll`);
     if (data.success && data.status === 'completed') {
       setPollingVideo(null);
-      if (selectedProject) refreshProject(selectedProject._id);
+      if (selectedProject) refreshProject(selectedProject.id);
       toast.success('Video generation completed!');
     }
   };
@@ -390,7 +390,7 @@ export default function App() {
     if (data.success) {
       toast.success('Project deleted');
       fetchProjects();
-      if (selectedProject?._id === id) {
+      if (selectedProject?.id === id) {
         setSelectedProject(null);
         setActiveView('projects');
       }
@@ -948,7 +948,7 @@ function DashboardView({ analytics, analyticsTimeframe, setAnalyticsTimeframe, p
             <CardContent>
               <div className="space-y-2">
                 {projects.slice(0, 5).map(proj => (
-                  <div key={proj._id} className="flex items-center justify-between p-2 rounded hover:bg-slate-700/50 cursor-pointer" onClick={() => onNavigate('project-detail')}>
+                  <div key={proj.id} className="flex items-center justify-between p-2 rounded hover:bg-slate-700/50 cursor-pointer" onClick={() => onNavigate('project-detail')}>
                     <div className="flex-1">
                       <div className="text-sm text-white font-medium line-clamp-1">{proj.concept}</div>
                       <div className="text-xs text-slate-400">{new Date(proj.created_at).toLocaleDateString()}</div>
@@ -1041,7 +1041,7 @@ function ProjectsView({ projects, onCreateNew, onSelectProject, calculateProgres
 
           return (
             <Card
-              key={project._id}
+              key={project.id}
               className="bg-slate-800/50 border-slate-700 hover:border-violet-500 transition-all cursor-pointer group"
               onClick={() => onSelectProject(project)}
             >
@@ -1744,7 +1744,7 @@ function ProjectDetailView({
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => onDelete(project._id)}
+          onClick={() => onDelete(project.id)}
           className="text-red-400 hover:text-red-300 hover:bg-red-950"
         >
           <Trash2 className="h-4 w-4 mr-2" />
@@ -1788,7 +1788,7 @@ function ProjectDetailView({
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => onRunStep(project._id, step.endpoint, true)}
+                          onClick={() => onRunStep(project.id, step.endpoint, true)}
                           disabled={loading}
                           className="border-slate-600"
                         >
@@ -1799,7 +1799,7 @@ function ProjectDetailView({
                       {(!step.data || status === 'failed') && (
                         <Button
                           size="sm"
-                          onClick={() => onRunStep(project._id, step.endpoint, false)}
+                          onClick={() => onRunStep(project.id, step.endpoint, false)}
                           disabled={loading || isLocked}
                           className="bg-violet-600 hover:bg-violet-700"
                         >
@@ -1864,7 +1864,7 @@ function ProjectDetailView({
                                   <Button
                                     size="sm"
                                     onClick={async () => {
-                                      const result = await onUpdateConcept(project._id, editedConcept);
+                                      const result = await onUpdateConcept(project.id, editedConcept);
                                       if (result?.success) {
                                         setEditingConcept(false);
                                         setEditedConcept('');
@@ -1908,7 +1908,7 @@ function ProjectDetailView({
                               <button
                                 key={i}
                                 onClick={async () => {
-                                  const result = await onApplySuggestedTopic(project._id, topic);
+                                  const result = await onApplySuggestedTopic(project.id, topic);
                                   if (result?.success) {
                                     setEditingConcept(false);
                                     setEditedConcept('');
@@ -1992,7 +1992,7 @@ function ProjectDetailView({
                           </div>
                         </div>
                         <Button
-                          onClick={() => onRunFullPipeline(project._id)}
+                          onClick={() => onRunFullPipeline(project.id)}
                           disabled={loading || pipelineRunning}
                           className="w-full bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-700 hover:to-blue-700 text-white font-semibold"
                         >
@@ -2079,7 +2079,7 @@ function ProjectDetailView({
                             className={`cursor-pointer rounded-lg overflow-hidden border-2 transition-all ${
                               step.data.selected === url ? 'border-violet-500 ring-2 ring-violet-500' : 'border-slate-700 hover:border-slate-600'
                             }`}
-                            onClick={() => onSelectThumbnail(project._id, url)}
+                            onClick={() => onSelectThumbnail(project.id, url)}
                           >
                             <img src={url} alt={ratio} className="w-full h-auto" />
                             <div className="bg-slate-900/80 p-2 text-xs text-center text-white font-medium">

@@ -1,5 +1,5 @@
 {
-    "name": "nextjs-mongo-template",
+    "name": "creatorflow-ai",
     "version": "0.1.0",
     "private": true,
     "scripts": {
@@ -49,7 +49,7 @@
         "embla-carousel-react": "^8.6.0",
         "input-otp": "^1.4.2",
         "lucide-react": "^0.516.0",
-        "mongodb": "^6.6.0",
+        "@supabase/supabase-js": "^2.49.1",
         "next": "14.2.3",
         "next-auth": "^4.24.13",
         "next-themes": "^0.4.6",
